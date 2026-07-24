@@ -1,0 +1,166 @@
+# Scoring rules for invoice classification.
+#
+# This file ships next to the executable rather than inside it, so a keyword can
+# be added for a supplier whose invoices are being missed without rebuilding.
+# Tune it against real documents in the debug GUI, which shows what each rule
+# contributed and what text it actually matched.
+#
+# Rules are additive. Position-restricted rules are written as bonuses on top of
+# an unrestricted rule, so a title at the top of the page scores higher than the
+# same word buried in the body without either rule needing to know about the
+# other.
+#
+# match:
+#   exact        literal match; use when the keyword is short or unambiguous
+#   subsequence  characters in order within `window`; survives OCR inserting a
+#                stray character (請求書 is still found inside 請求澤書)
+#   fuzzy        within `max_distance` edits; also survives substitutions, but
+#                needs a pattern of 4+ characters or it matches unrelated text
+#   regex        for structured strings; write (?i) inline since the text has
+#                already been lowercased by normalization
+
+version: 1
+
+thresholds:
+  high: 70 # at or above -> invoice
+  low: 40 # at or above -> needs_review; below -> other
+
+normalize:
+  nfkc: true # ＩＮＶＯＩＣＥ -> invoice, ㈱ -> (株)
+  strip_whitespace: true # this is what defeats 請　求　書
+  strip_symbols: false # most destructive step; turn on only if 請|求|書 shows up
+  lowercase: true
+
+# Loose matching against a PDF's own text layer can only invent keywords, never
+# recover missing ones, because those characters are already exact.
+fuzzy_on_text_layer: false
+
+rules:
+  # --- Title -------------------------------------------------------------
+  # ご請求書 / 御請求書 / 請求明細書 all contain 請求書, so one rule covers them.
+  - id: title_seikyusho
+    pattern: 請求書
+    weight: 30
+    match: subsequence
+    window: 6
+
+  - id: title_seikyusho_at_top
+    pattern: 請求書
+    weight: 20
+    match: subsequence
+    window: 6
+    scope: top_quarter
+    note: Bonus for a title in the top quarter, where document titles sit.
+
+  - id: title_invoice
+    pattern: invoice
+    weight: 25
+    match: fuzzy
+    max_distance: 1
+
+  - id: title_invoice_at_top
+    pattern: invoice
+    weight: 15
+    match: fuzzy
+    max_distance: 1
+    scope: top_quarter
+    note: Carries Korean-language invoices, which print the English word.
+
+  # --- Amounts -----------------------------------------------------------
+  - id: amount_seikyu_kingaku
+    pattern: 請求金額
+    weight: 20
+    match: subsequence
+    window: 7
+
+  - id: amount_goukei
+    pattern: 合計金額
+    weight: 10
+    match: subsequence
+    window: 7
+
+  - id: amount_shouhizei
+    pattern: 消費税
+    weight: 8
+    match: subsequence
+    window: 5
+
+  - id: amount_shoukei
+    pattern: 小計
+    weight: 5
+    match: exact
+
+  # --- Payment -----------------------------------------------------------
+  # The strongest layout-independent signal after the title: a document that
+  # tells you where to send money is asking to be paid.
+  - id: pay_furikomisaki
+    pattern: 振込先
+    weight: 15
+    match: subsequence
+    window: 5
+
+  - id: pay_kigen
+    pattern: 支払期限
+    weight: 15
+    match: subsequence
+    window: 7
+    note: お支払期限 and ご支払期限 both contain this.
+
+  - id: pay_kijitsu
+    pattern: 支払期日
+    weight: 15
+    match: subsequence
+    window: 7
+
+  - id: pay_kouza
+    pattern: 口座番号
+    weight: 10
+    match: subsequence
+    window: 7
+
+  # --- Japanese qualified invoice system ---------------------------------
+  - id: touroku_bangou
+    regex: (?i)(?<![0-9a-z])t\d{13}(?!\d)
+    weight: 20
+    match: regex
+    note: >-
+      Registration number, T + 13 digits. Strong and layout-independent.
+      Uses lookarounds rather than \b, which does not fire between a kanji and
+      a letter -- after whitespace stripping the number sits directly against
+      登録番号, and \b would never match there.
+
+  # --- Addressee ---------------------------------------------------------
+  - id: addressee_onchu
+    pattern: 御中
+    weight: 5
+    match: exact
+    note: Weak on its own; appears on every kind of business document.
+
+  # --- Exclusions --------------------------------------------------------
+  # Sized so that a document which is genuinely both -- 納品書兼請求書 is a real
+  # form -- lands in needs_review rather than being thrown out. That is the
+  # review folder doing its job.
+  - id: exclude_mitsumori
+    pattern: 見積
+    weight: -50
+    match: exact
+
+  - id: exclude_nouhinsho
+    pattern: 納品書
+    weight: -35
+    match: exact
+
+  - id: exclude_chuumonsho
+    pattern: 注文書
+    weight: -40
+    match: exact
+
+  - id: exclude_ryoushuusho
+    pattern: 領収書
+    weight: -40
+    match: exact
+
+  - id: exclude_kenshuusho
+    pattern: 検収書
+    weight: -30
+    match: exact

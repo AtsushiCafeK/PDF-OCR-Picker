@@ -1,7 +1,7 @@
 [project]
 name = "pdf-ocr"
 version = "0.1.0"
-description = ""
+description = "Classify PDFs as invoices and file them accordingly"
 authors = [
     {name = "Atsushi",email = "atsushi.shindo@it-libero.jp"}
 ]
@@ -28,6 +28,7 @@ priority = "explicit"
 [tool.poetry.dependencies]
 torch = {source = "pytorch-cpu"}
 torchvision = {source = "pytorch-cpu"}
+
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
@@ -35,5 +36,19 @@ build-backend = "poetry.core.masonry.api"
 [dependency-groups]
 dev = [
     "pytest (>=9.1.1,<10.0.0)",
-    "ruff (>=0.16.0,<0.17.0)"
+    "ruff (>=0.16.0,<0.17.0)",
+    "pyside6 (>=6.11.1,<7.0.0)"
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Puts the project root on sys.path so tests can share helpers via
+# `from tests.conftest import ...`.
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
