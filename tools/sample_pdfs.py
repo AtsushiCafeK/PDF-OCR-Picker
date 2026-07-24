@@ -504,6 +504,97 @@ def receipt(page: pymupdf.Page) -> None:
     write(page, 380, 385, "登録番号 T8889990001112", 9)
 
 
+def email_printout(page: pymupdf.Page) -> None:
+    """An email that forwards an invoice, printed to PDF.
+
+    The nastiest false positive available. Every keyword the classifier looks
+    for is present -- 請求書 in the subject line at the very top of the page,
+    ご請求金額, お支払期限, the English word -- and yet the document is not an
+    invoice, it is a covering note. Filing it as one puts a duplicate in the
+    accounting folder that reconciles against nothing.
+
+    What separates it is not the invoice vocabulary but the mail header, which
+    no invoice ever carries.
+    """
+    write(page, 60, 70, "差出人:", 9)
+    write(page, 150, 70, "田中 太郎 <tanaka@sample-corp.co.jp>", 9)
+    write(page, 60, 88, "送信日時:", 9)
+    write(page, 150, 88, "2026年7月24日 10:32", 9)
+    write(page, 60, 106, "宛先:", 9)
+    write(page, 150, 106, "経理部 <keiri@example.co.jp>", 9)
+    write(page, 60, 124, "CC:", 9)
+    write(page, 150, 124, "営業部 <eigyo@example.co.jp>", 9)
+    write(page, 60, 142, "件名:", 9)
+    write(page, 150, 142, "【ご請求】2026年7月分 請求書送付のご案内 (Invoice)", 9)
+    write(page, 60, 160, "添付ファイル:", 9)
+    write(page, 150, 160, "請求書_202607.pdf (128 KB)", 9)
+    rule(page, 60, 175, 535, 0.8)
+
+    body = [
+        "株式会社サンプル",
+        "経理ご担当者様",
+        "",
+        "いつもお世話になっております。",
+        "サンプルコーポレーションの田中でございます。",
+        "",
+        "2026年7月分の請求書を添付ファイルにてお送りいたします。",
+        "ご請求金額は 110,000円（税込）でございます。",
+        "お支払期限は 2026年8月31日 となっておりますので、",
+        "ご確認のうえお手続きいただけますと幸いです。",
+        "",
+        "なお、振込先は前回より変更ございません。",
+        "",
+        "ご不明な点がございましたらお気軽にお問い合わせください。",
+        "何卒よろしくお願い申し上げます。",
+    ]
+    for index, line in enumerate(body):
+        write(page, 60, 205 + index * 18, line, 10)
+
+    rule(page, 60, 505, 250, 0.5)
+    for index, line in enumerate(
+        [
+            "サンプルコーポレーション株式会社",
+            "営業本部　田中 太郎",
+            "TEL 03-0000-0000 / FAX 03-0000-0001",
+            "tanaka@sample-corp.co.jp",
+        ]
+    ):
+        write(page, 60, 525 + index * 16, line, 9, color=GREY)
+
+
+def email_printout_english(page: pymupdf.Page) -> None:
+    """The same trap in English, where 'Invoice' is the subject line."""
+    write(page, 60, 70, "From:", 9, EN)
+    write(page, 150, 70, "John Smith <j.smith@sample-global.com>", 9, EN)
+    write(page, 60, 88, "Sent:", 9, EN)
+    write(page, 150, 88, "Friday, 24 July 2026 10:32", 9, EN)
+    write(page, 60, 106, "To:", 9, EN)
+    write(page, 150, 106, "Accounts Payable <ap@example.co.jp>", 9, EN)
+    write(page, 60, 124, "Subject:", 9, EN)
+    write(page, 150, 124, "Invoice INV-2026-0118 for July 2026", 9, EN)
+    write(page, 60, 142, "Attachments:", 9, EN)
+    write(page, 150, 142, "INV-2026-0118.pdf (96 KB)", 9, EN)
+    rule(page, 60, 158, 535, 0.8)
+
+    body = [
+        "Dear Accounts Payable team,",
+        "",
+        "Please find attached our invoice INV-2026-0118 covering services",
+        "provided in July 2026.",
+        "",
+        "The total amount is USD 3,795.00 and payment is due by 31 August 2026.",
+        "Our bank details are unchanged from the previous invoice.",
+        "",
+        "Please let me know if you need anything further.",
+        "",
+        "Kind regards,",
+        "John Smith",
+        "Sample Global Inc.",
+    ]
+    for index, line in enumerate(body):
+        write(page, 60, 190 + index * 18, line, 10, EN)
+
+
 def purchase_order(page: pymupdf.Page) -> None:
     centered(page, 90, "注 文 書", 22)
     write(page, 60, 140, "株式会社サンプル電機　御中", 11)
@@ -532,8 +623,20 @@ def purchase_order(page: pymupdf.Page) -> None:
 
 
 @dataclass(frozen=True)
+class Layout:
+    """One document design, independent of how it is later rendered."""
+
+    name: str
+    draw: Callable[[pymupdf.Page], None]
+    expected: Verdict
+    difficulty: str
+    note: str
+    landscape: bool = False
+
+
+@dataclass(frozen=True)
 class Sample:
-    """One test document and the verdict it ought to receive."""
+    """One test document: a layout, rendered either digitally or as a scan."""
 
     name: str
     draw: Callable[[pymupdf.Page], None]
@@ -546,57 +649,57 @@ class Sample:
     OCR is forced. Keys: ``angle``, ``noise``, ``blur``, ``dpi``."""
 
 
-SAMPLES: list[Sample] = [
-    Sample(
+LAYOUTS: list[Layout] = [
+    Layout(
         "invoice_01_centered",
         centered_title,
         Verdict.INVOICE,
         "easy",
         "Control case: centred title, every keyword present.",
     ),
-    Sample(
+    Layout(
         "invoice_02_spaced_title",
         spaced_title,
         Verdict.INVOICE,
         "medium",
         "請　求　書 padded with ideographic spaces; amounts spaced too.",
     ),
-    Sample(
+    Layout(
         "invoice_03_english_header",
         english_header,
         Verdict.INVOICE,
         "easy",
         "Bilingual template led by the Latin word.",
     ),
-    Sample(
+    Layout(
         "invoice_04_title_below_fold",
         title_below_the_fold,
         Verdict.INVOICE,
         "medium",
         "Letterhead pushes the title out of the top quarter; no position bonus.",
     ),
-    Sample(
+    Layout(
         "invoice_05_no_title_word",
         no_title_word,
         Verdict.INVOICE,
         "hard",
         "Never prints 請求書. Rests entirely on amount and payment vocabulary.",
     ),
-    Sample(
+    Layout(
         "invoice_06_rotated_title",
         rotated_title,
         Verdict.INVOICE,
         "hard",
         "Title set sideways down the left margin.",
     ),
-    Sample(
+    Layout(
         "invoice_07_dense_table",
         dense_table,
         Verdict.INVOICE,
         "medium",
         "Small 請求明細書 title buried under eighteen line items.",
     ),
-    Sample(
+    Layout(
         "invoice_08_landscape",
         landscape_layout,
         Verdict.INVOICE,
@@ -604,90 +707,114 @@ SAMPLES: list[Sample] = [
         "Landscape page with the title in the top-right.",
         landscape=True,
     ),
-    Sample(
+    Layout(
         "invoice_09_korean",
         korean_invoice,
         Verdict.NEEDS_REVIEW,
         "hard",
         "Hangul body; only the English word is readable to a ja+en reader.",
     ),
-    Sample(
+    Layout(
         "invoice_10_delivery_and_invoice",
         delivery_note_and_invoice,
         Verdict.NEEDS_REVIEW,
         "hard",
         "納品書兼請求書 -- genuinely both, so review is the correct answer.",
     ),
-    Sample(
+    Layout(
         "other_01_quotation",
         quotation,
         Verdict.OTHER,
         "medium",
         "Shares most invoice vocabulary; only 見積 separates it.",
     ),
-    Sample(
+    Layout(
         "other_02_delivery_note",
         delivery_note,
         Verdict.OTHER,
         "easy",
         "Delivery note with amounts but no request for payment.",
     ),
-    Sample(
+    Layout(
         "other_03_receipt",
         receipt,
         Verdict.OTHER,
         "medium",
         "Receipt: has an amount and a registration number, but is not a claim.",
     ),
-    Sample(
+    Layout(
         "other_04_purchase_order",
         purchase_order,
         Verdict.OTHER,
         "easy",
         "Purchase order, i.e. the mirror image of an invoice.",
     ),
-    # Scanned variants. Same layouts, flattened to images, so the text layer is
-    # gone and the OCR path is exercised end to end.
-    Sample(
-        "scan_01_centered",
-        centered_title,
-        Verdict.INVOICE,
-        "medium",
-        "Scanned control: slight skew and sensor noise.",
-        scan={"angle": 0.6, "noise": 7.0, "blur": 0.4},
-    ),
-    Sample(
-        "scan_02_spaced_title",
-        spaced_title,
-        Verdict.INVOICE,
-        "hard",
-        "Scanned 請　求　書: spacing plus OCR error in one document.",
-        scan={"angle": -1.1, "noise": 10.0, "blur": 0.6},
-    ),
-    Sample(
-        "scan_05_no_title_word",
-        no_title_word,
-        Verdict.INVOICE,
-        "hard",
-        "Scanned, and never prints the word 請求書.",
-        scan={"angle": 0.9, "noise": 9.0, "blur": 0.5},
-    ),
-    Sample(
-        "scan_09_korean",
-        korean_invoice,
-        Verdict.NEEDS_REVIEW,
-        "hard",
-        "Scanned Hangul: the English word has to survive the recogniser.",
-        scan={"angle": -0.7, "noise": 8.0, "blur": 0.5},
-    ),
-    Sample(
-        "scan_11_quotation",
-        quotation,
+    Layout(
+        "other_05_email_printout",
+        email_printout,
         Verdict.OTHER,
         "hard",
-        "Scanned quotation: 見積 has to survive, or a non-invoice gets filed.",
-        scan={"angle": 1.3, "noise": 11.0, "blur": 0.6},
+        "Email forwarding an invoice: 請求書 in the subject at the top of the "
+        "page, plus ご請求金額 and お支払期限 in the body. Only the mail header "
+        "says it is not the invoice itself.",
     ),
+    Layout(
+        "other_06_email_english",
+        email_printout_english,
+        Verdict.OTHER,
+        "hard",
+        "The same trap in English, with Invoice as the subject line.",
+    ),
+]
+
+SCAN_PROFILES: list[dict] = [
+    {"angle": 0.6, "noise": 7.0, "blur": 0.4},
+    {"angle": -1.1, "noise": 10.0, "blur": 0.6},
+    {"angle": 0.9, "noise": 9.0, "blur": 0.5},
+    {"angle": -0.4, "noise": 5.0, "blur": 0.3},
+    {"angle": 1.3, "noise": 11.0, "blur": 0.7},
+    {"angle": -0.8, "noise": 8.0, "blur": 0.45},
+    {"angle": 0.3, "noise": 13.0, "blur": 0.8},
+]
+"""Scanner characteristics, cycled across the layouts so no two scans are
+degraded identically. Real scanners differ in how they feed paper and how much
+their sensors hiss, and a corpus where every page is skewed by the same 0.6
+degrees would prove less than it appears to."""
+
+HARDER = {"easy": "medium", "medium": "hard", "hard": "hard"}
+
+
+def _scanned(layout: Layout, profile: dict) -> Sample:
+    """The same layout as a photocopy: no text layer, so OCR has to carry it."""
+    return Sample(
+        name=f"scan_{layout.name}",
+        draw=layout.draw,
+        expected=layout.expected,
+        difficulty=HARDER[layout.difficulty],
+        note=f"Scanned. {layout.note}",
+        landscape=layout.landscape,
+        scan=profile,
+    )
+
+
+# Every layout is produced twice: once as a digital PDF carrying a text layer,
+# and once flattened to an image. The pair matters more than either half. A
+# difference between them is never the layout -- it is what the recogniser did
+# to it, which is the only way to see the OCR path's failures separately from
+# the rules'.
+SAMPLES: list[Sample] = [
+    Sample(
+        name=layout.name,
+        draw=layout.draw,
+        expected=layout.expected,
+        difficulty=layout.difficulty,
+        note=layout.note,
+        landscape=layout.landscape,
+    )
+    for layout in LAYOUTS
+] + [
+    _scanned(layout, SCAN_PROFILES[index % len(SCAN_PROFILES)])
+    for index, layout in enumerate(LAYOUTS)
 ]
 
 

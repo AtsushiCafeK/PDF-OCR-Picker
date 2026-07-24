@@ -173,6 +173,34 @@ class TestBatchLog:
         assert stdout_json(capsys)["files"] == 0
 
 
+class TestNoArguments:
+    def test_it_shows_help_instead_of_a_usage_error(self, capsys):
+        """This is what double-clicking the executable does. Argparse's usage
+        error is correct and useless: the window carrying it closes with the
+        process, so the user sees a flash and nothing else."""
+        assert main([]) == ExitCode.ERROR
+        out = capsys.readouterr().out
+        assert "Examples:" in out
+        assert "batch" in out
+
+    def test_the_help_explains_the_exit_codes(self, capsys):
+        """The exit code is the interface a flow branches on."""
+        main([])
+        out = capsys.readouterr().out
+        assert "0 invoice" in out
+        assert "9 error" in out
+
+    def test_the_help_says_the_gui_is_not_in_here(self, capsys):
+        main([])
+        assert "not part of this executable" in capsys.readouterr().out
+
+    def test_it_does_not_block_when_not_launched_from_explorer(self, capsys):
+        """Pausing is only ever right when the window is about to vanish; doing
+        it in a script or a flow would hang the run."""
+        main([])
+        assert "Press Enter" not in capsys.readouterr().out
+
+
 class TestDiag:
     def test_it_reports_the_make_up_of_a_folder(self, inbox, capsys):
         """The question the design has been assuming an answer to."""

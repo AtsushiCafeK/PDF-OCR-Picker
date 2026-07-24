@@ -164,3 +164,61 @@ rules:
     pattern: 検収書
     weight: -30
     match: exact
+
+  # --- Email printouts ---------------------------------------------------
+  # A printed email that forwards an invoice contains every keyword above:
+  # 請求書 in the subject line at the very top of the page, ご請求金額 and
+  # お支払期限 in the body. It is still not an invoice, and filing it as one
+  # puts a duplicate in the accounting folder that reconciles against nothing.
+  #
+  # What distinguishes it is the mail header, which no invoice carries. These
+  # are weighted to fire together rather than individually: any one of them
+  # alone is weak evidence, but 差出人 plus 送信日時 plus 件名 on one page is
+  # not something that happens to a real invoice.
+  - id: exclude_mail_from
+    pattern: 差出人
+    weight: -40
+    match: exact
+
+  - id: exclude_mail_sent
+    pattern: 送信日時
+    weight: -40
+    match: exact
+
+  - id: exclude_mail_subject
+    pattern: 件名
+    weight: -30
+    match: exact
+
+  - id: exclude_mail_attachment
+    pattern: 添付ファイル
+    weight: -30
+    match: subsequence
+    window: 8
+
+  - id: exclude_mail_greeting
+    pattern: お世話になっております
+    weight: -20
+    match: subsequence
+    window: 14
+    note: >-
+      Opens most Japanese business email and almost no invoice. Kept mild
+      because a covering note attached to a real invoice may use it too.
+
+  # English mail headers. Written with the colon so that the very common words
+  # "from", "to" and "sent" cannot fire on ordinary prose; note that this pair
+  # of rules is defeated by turning strip_symbols on, which removes colons.
+  - id: exclude_mail_subject_en
+    pattern: "subject:"
+    weight: -40
+    match: exact
+
+  - id: exclude_mail_sent_en
+    pattern: "sent:"
+    weight: -35
+    match: exact
+
+  - id: exclude_mail_attachment_en
+    pattern: "attachments:"
+    weight: -30
+    match: exact

@@ -61,7 +61,7 @@ class TestTextLayerDetection:
 
     def test_a_scanned_page_carries_none(self, tmp_path):
         """Flattening to an image is what forces the OCR path."""
-        path = sample_pdf(tmp_path, "scan_01_centered")
+        path = sample_pdf(tmp_path, "scan_invoice_01_centered")
         with pymupdf.open(path) as document:
             blocks = text_layer_blocks(document[0])
         assert not has_usable_text_layer(blocks)
@@ -86,7 +86,7 @@ class TestRouting:
         assert engine.calls == 0
 
     def test_ocr_runs_when_the_text_layer_is_missing(self, tmp_path):
-        path = sample_pdf(tmp_path, "scan_01_centered")
+        path = sample_pdf(tmp_path, "scan_invoice_01_centered")
         engine = FakeEngine([TextBlock(text="請求書", bbox=(0, 0, 100, 40))])
         page = extract_first_page(path, engine)
         assert page.source is Source.OCR
@@ -103,7 +103,7 @@ class TestRouting:
 
     def test_a_scan_without_an_engine_yields_an_empty_page(self, tmp_path):
         """Not an error: a text-layer-only run is a legitimate mode."""
-        path = sample_pdf(tmp_path, "scan_01_centered")
+        path = sample_pdf(tmp_path, "scan_invoice_01_centered")
         page = extract_first_page(path, engine=None)
         assert page.source is Source.OCR
         assert page.blocks == []
@@ -113,7 +113,7 @@ class TestCoordinates:
     def test_ocr_boxes_are_converted_from_pixels_to_points(self, tmp_path):
         """Without this the top-quarter rules would compare pixels against a
         cutoff measured in points, and would effectively never fire."""
-        path = sample_pdf(tmp_path, "scan_01_centered")
+        path = sample_pdf(tmp_path, "scan_invoice_01_centered")
         engine = FakeEngine(
             [
                 TextBlock(
@@ -136,7 +136,7 @@ class TestCoordinates:
 
     def test_a_converted_box_lands_inside_the_top_quarter(self, tmp_path):
         """The end-to-end consequence of the conversion being right."""
-        path = sample_pdf(tmp_path, "scan_01_centered")
+        path = sample_pdf(tmp_path, "scan_invoice_01_centered")
         engine = FakeEngine(
             [TextBlock(text="請求書", bbox=(0, 40 * PIXELS_PER_POINT, 400, 300))]
         )
@@ -214,3 +214,4 @@ class TestPageNumbering:
             page = extract_page(document[0])
         assert page.number == 1
         assert page.source is Source.TEXT_LAYER
+

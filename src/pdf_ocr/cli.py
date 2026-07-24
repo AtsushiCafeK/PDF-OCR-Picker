@@ -87,6 +87,26 @@ def configure_streams() -> None:
             reconfigure(encoding="utf-8", errors="replace")
 
 
+def owns_console() -> bool:
+    """Whether this process created the console window it is writing to.
+
+    Distinguishes a double-click in Explorer, where the window is destroyed the
+    moment the process ends, from a shell invocation, where whatever was printed
+    stays on screen. Only in the first case is pausing a kindness rather than a
+    hang.
+    """
+    if sys.platform != "win32" or not sys.stdin or not sys.stdin.isatty():
+        return False
+    try:
+        import ctypes
+
+        buffer = (ctypes.c_uint * 2)()
+        # A console shared with a parent shell lists at least two processes.
+        return ctypes.windll.kernel32.GetConsoleProcessList(buffer, 2) == 1
+    except Exception:
+        return False
+
+
 def resolve_rules_path(override: Path | None = None) -> Path:
     """Find the rules file, preferring one the operator can edit.
 
@@ -324,7 +344,36 @@ def add_move_arguments(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="pdf-sorter", description="Classify PDFs as invoices and file them."
+        prog="pdf-sorter",
+        description="Classify PDFs as invoices and file them.",
+        # Shown to anyone who double-clicks the executable, so it has to answer
+        # "what is this and how do I use it" rather than just list flags.
+        epilog=(
+            "Examples:\n"
+            "  pdf-sorter batch C:\\in --out result.jsonl --dry-run\n"
+            "      classify a folder and report what it would do, moving nothing\n"
+            "\n"
+            "  pdf-sorter batch C:\\in --move-to C:\\sorted --out result.jsonl\n"
+            "      the same, but actually file the documents\n"
+            "\n"
+            "  pdf-sorter classify C:\\in\\one.pdf\n"
+            "      a single file; the exit code is the verdict\n"
+            "      0 invoice   1 not an invoice   2 needs review   9 error\n"
+            "\n"
+            "  pdf-sorter diag C:\\in\n"
+            "      report what a folder is made of; moves nothing\n"
+            "\n"
+            "Prefer 'batch' over calling 'classify' in a loop: loading the OCR\n"
+            "models takes several seconds, and batch pays that once per run\n"
+            "rather than once per file.\n"
+            "\n"
+            "Keywords and thresholds come from rules.yaml beside this executable;\n"
+            "edit it to handle a supplier whose invoices are being missed.\n"
+            "\n"
+            "This is the command-line tool. The tuning GUI is a separate\n"
+            "development program and is not part of this executable.\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=__version__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -363,7 +412,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     configure_streams()
-    arguments = build_parser().parse_args(argv)
+    parser = build_parser()
+    argv = sys.argv[1:] if argv is None else argv
+
+    if not argv:
+        # What a double-click produces. Argparse's usage error is correct and
+        # completely useless here, because the window carrying it closes with
+        # the process; the reasonable reading of "no arguments" is that someone
+        # wants to know what this program does.
+        parser.print_help()
+        if owns_console():
+            print("\nPress Enter to close this window.")
+            with contextlib.suppress(EOFError, KeyboardInterrupt):
+                input()
+        return ExitCode.ERROR
+
+    arguments = parser.parse_args(argv)
 
     # stderr, always: stdout is reserved for the JSON that the caller parses.
     logging.basicConfig(

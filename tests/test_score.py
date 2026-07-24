@@ -120,6 +120,56 @@ class TestKeywordCountedOnce:
         assert once.score == twice.score
 
 
+class TestEmailPrintouts:
+    """A printed email forwarding an invoice carries every keyword the
+    classifier looks for, and is not an invoice. Filing it as one puts a
+    duplicate in the accounting folder that reconciles against nothing."""
+
+    def _email(self) -> list[tuple[str, float]]:
+        return [
+            ("差出人 田中太郎", 50.0),
+            ("送信日時 2026年7月24日 10:32", 70.0),
+            ("件名 【ご請求】請求書送付のご案内 (Invoice)", 110.0),
+            ("添付ファイル 請求書_202607.pdf", 130.0),
+            ("いつもお世話になっております。", 200.0),
+            ("ご請求金額は 110,000円 でございます。", 260.0),
+            ("お支払期限は 2026年8月31日 です。", 290.0),
+        ]
+
+    def test_it_is_not_filed_as_an_invoice(self, rules):
+        assert score_page(make_page(self._email()), rules).verdict is not Verdict.INVOICE
+
+    def test_the_mail_header_is_what_rejects_it(self, rules):
+        """Not the absence of invoice vocabulary -- all of it is present."""
+        result = score_page(make_page(self._email()), rules)
+        fired = {hit.rule_id for hit in result.hits}
+        assert "title_seikyusho" in fired
+        assert "amount_seikyu_kingaku" in fired
+        assert {"exclude_mail_from", "exclude_mail_sent"} <= fired
+
+    def test_an_english_mail_header_rejects_it_too(self, rules):
+        page = make_page(
+            [
+                ("From: John Smith", 50.0),
+                ("Sent: Friday, 24 July 2026", 70.0),
+                ("Subject: Invoice INV-2026-0118", 110.0),
+                ("Attachments: INV-2026-0118.pdf", 130.0),
+                ("Payment is due by 31 August 2026.", 260.0),
+            ]
+        )
+        assert score_page(page, rules).verdict is Verdict.OTHER
+
+    def test_a_weak_mail_signal_escalates_rather_than_files(self, rules):
+        """If OCR loses part of the header, the score should drift towards
+        review, never towards filing it as an invoice."""
+        partial = [line for line in self._email() if "差出人" not in line[0]]
+        assert score_page(make_page(partial), rules).verdict is not Verdict.INVOICE
+
+    def test_a_real_invoice_is_untouched_by_the_mail_rules(self, rules, invoice_lines):
+        result = score_page(make_page(invoice_lines), rules)
+        assert not any(hit.rule_id.startswith("exclude_mail") for hit in result.hits)
+
+
 class TestVerdictBoundaries:
     @pytest.mark.parametrize(
         ("score", "expected"),
