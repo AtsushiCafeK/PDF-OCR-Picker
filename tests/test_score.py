@@ -98,6 +98,44 @@ class TestScope:
         assert {hit.rule_id for hit in result.hits} == {"title_seikyusho"}
 
 
+class TestTitleNeedNotBeProminent:
+    """A large company logo is very often the biggest thing on an invoice, not
+    the word 請求書. The classifier scores keyword presence, never size, so a
+    dominant logo must not change the outcome."""
+
+    def test_a_big_non_keyword_logo_does_not_help_or_hurt(self, rules):
+        """Font size is not modelled at all; a huge brand token is just text
+        that matches no rule."""
+        without_logo = score_page(make_page([("請求書", 50.0)]), rules)
+        with_logo = score_page(
+            make_page([("SAMPLE TECH", 50.0), ("請求書", 120.0)]), rules
+        )
+        title_hits = {"title_seikyusho", "title_seikyusho_at_top"}
+        assert title_hits <= {hit.rule_id for hit in with_logo.hits}
+        assert with_logo.score == without_logo.score
+
+    def test_a_small_title_below_the_fold_is_still_found(self, rules):
+        """The graphic-logo case: the sole 請求書 is a small label low on the
+        page. It is found, but earns no position bonus -- the decision rests on
+        the amount and payment vocabulary instead."""
+        page = make_page(
+            [
+                ("NIMBUS", 90.0),
+                ("株式会社サンプル電子 御中", 160.0),
+                ("ご請求金額 ¥594,000", 225.0),
+                ("消費税 54,000", 400.0),
+                ("請求書", 520.0),
+                ("お支払期限 2026年8月31日", 560.0),
+                ("お振込先 三井住友銀行 渋谷支店", 580.0),
+            ]
+        )
+        result = score_page(page, rules)
+        fired = {hit.rule_id for hit in result.hits}
+        assert "title_seikyusho" in fired
+        assert "title_seikyusho_at_top" not in fired
+        assert result.verdict is Verdict.INVOICE
+
+
 class TestPatternNormalization:
     def test_an_ascii_rule_matches_full_width_text(self, rules):
         """Patterns go through the same normalization as the page text, so an

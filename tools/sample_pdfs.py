@@ -38,6 +38,7 @@ EN = "helv"
 A4 = (595.0, 842.0)
 BLACK = (0.0, 0.0, 0.0)
 GREY = (0.45, 0.45, 0.45)
+WHITE = (1.0, 1.0, 1.0)
 
 DEFAULT_OUTPUT_DIR = Path("data/samples")
 
@@ -77,6 +78,18 @@ def rule(page: pymupdf.Page, x0: float, y: float, x1: float, width: float = 0.6)
 
 def box(page: pymupdf.Page, x0: float, y0: float, x1: float, y1: float) -> None:
     page.draw_rect(pymupdf.Rect(x0, y0, x1, y1), color=BLACK, width=0.6)
+
+
+def filled_box(
+    page: pymupdf.Page,
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    color: tuple[float, float, float] = BLACK,
+) -> None:
+    """A solid rectangle, for a graphic logo that reverses text out of it."""
+    page.draw_rect(pymupdf.Rect(x0, y0, x1, y1), color=color, fill=color)
 
 
 def item_table(
@@ -378,6 +391,83 @@ def landscape_layout(page: pymupdf.Page) -> None:
     write(page, 700, bottom + 40, "165,000", 11)
     write(page, 60, bottom + 70, "お支払期限 2026年8月末日", 10)
     write(page, 60, bottom + 90, "振込先 静岡銀行 浜松支店 普通 6677889", 10)
+
+
+def logo_dominates_title(page: pymupdf.Page) -> None:
+    """A large company wordmark, with 請求書 set much smaller.
+
+    On a real invoice the biggest thing on the page is very often the sender's
+    brand, not the word 請求書. A reader looking for "the title" as "the largest
+    text" would land on the logo. The classifier does not rank by size -- it
+    only asks whether the keyword is present -- so this should not trouble it,
+    and this sample is here to keep that true.
+    """
+    write(page, 60, 100, "SAMPLE TECH", 40, EN)
+    write(page, 62, 122, "サンプルテクノロジー株式会社", 12)
+    rule(page, 60, 135, 360, 1.2)
+
+    # The actual title, a third of the logo's size, tucked into the corner.
+    box(page, 430, 78, 535, 108)
+    write(page, 452, 100, "請求書", 14)
+
+    write(page, 60, 175, "株式会社サンプル商事　御中", 11)
+    write(page, 430, 128, "2026年7月24日", 9)
+    write(page, 430, 143, "No. ST-2026-0442", 9, EN)
+    write(page, 430, 158, "登録番号 T1234567890123", 9)
+
+    write(page, 60, 215, "ご請求金額", 12)
+    write(page, 160, 215, "¥110,000-", 16)
+    rule(page, 60, 223, 300, 1.2)
+
+    bottom = item_table(page, 60, 250, _standard_items())
+    write(page, 400, bottom + 22, "消費税(10%)", 10)
+    write(page, 480, bottom + 22, "10,000", 10)
+    write(page, 60, bottom + 70, "お支払期限　2026年8月31日", 10)
+    write(page, 60, bottom + 90, "お振込先　みずほ銀行 渋谷支店 普通 1234567", 10)
+
+
+def graphic_logo_reversed(page: pymupdf.Page) -> None:
+    """The logo is a filled block with the brand reversed out of it, and 請求書
+    appears only once, small and below the fold.
+
+    The hardest form of the same idea: the largest, highest-contrast mark on the
+    page is a graphic, the sole occurrence of the title is a small label further
+    down, and the decision therefore cannot lean on the title being prominent.
+    It rests on the amount and payment vocabulary instead -- exactly what the
+    design claims can carry a document on its own.
+    """
+    filled_box(page, 60, 70, 250, 120)
+    write(page, 78, 104, "NIMBUS", 30, EN, color=WHITE)
+    write(page, 260, 95, "Nimbus Solutions K.K.", 11, EN)
+    write(page, 260, 110, "ニンバスソリューションズ株式会社", 9)
+
+    write(page, 400, 80, "2026年7月24日", 9)
+    write(page, 400, 95, "No. NS-2026-7781", 9, EN)
+    write(page, 400, 110, "登録番号 T2223334445556", 9)
+
+    write(page, 60, 160, "株式会社サンプル電子　御中", 11)
+    write(page, 60, 185, "毎度格別のお引き立てを賜り厚く御礼申し上げます。", 9)
+
+    write(page, 60, 225, "ご請求金額", 12)
+    write(page, 170, 225, "¥ 594,000 -", 17)
+    rule(page, 60, 233, 320, 1.4)
+
+    bottom = item_table(
+        page,
+        60,
+        265,
+        [
+            ("クラウド利用料 2026年7月分", "1", "480,000", "480,000"),
+            ("初期構築サポート", "1", "60,000", "60,000"),
+        ],
+    )
+    write(page, 400, bottom + 22, "消費税", 10)
+    write(page, 480, bottom + 22, "54,000", 10)
+
+    # The one and only 請求書, a small label beneath the table.
+    write(page, 60, bottom + 60, "請求書", 11)
+    write(page, 60, bottom + 82, "お支払期限　2026年8月31日", 10)
+    write(page, 60, bottom + 102, "お振込先　三井住友銀行 渋谷支店 普通 2233445", 10)
 
 
 def korean_invoice(page: pymupdf.Page) -> None:
@@ -720,6 +810,24 @@ LAYOUTS: list[Layout] = [
         Verdict.NEEDS_REVIEW,
         "hard",
         "納品書兼請求書 -- genuinely both, so review is the correct answer.",
+    ),
+    Layout(
+        "invoice_11_logo_dominates_title",
+        logo_dominates_title,
+        Verdict.INVOICE,
+        "medium",
+        "A large company wordmark dwarfs the 請求書 title. The biggest text on "
+        "the page is the brand, not the title -- which the classifier ignores, "
+        "because it scores keyword presence rather than size.",
+    ),
+    Layout(
+        "invoice_12_graphic_logo_reversed",
+        graphic_logo_reversed,
+        Verdict.INVOICE,
+        "hard",
+        "The dominant mark is a filled logo block, and the sole 請求書 is a "
+        "small label below the fold -- so the decision rests on the amount and "
+        "payment vocabulary, not on a prominent title.",
     ),
     Layout(
         "other_01_quotation",
