@@ -16,6 +16,9 @@ dependencies = [
     "pyyaml (>=6.0.3,<7.0.0)"
 ]
 
+[project.scripts]
+pdf-sorter = "pdf_ocr.cli:main"
+
 [tool.poetry]
 packages = [{include = "pdf_ocr", from = "src"}]
 
@@ -37,7 +40,8 @@ build-backend = "poetry.core.masonry.api"
 dev = [
     "pytest (>=9.1.1,<10.0.0)",
     "ruff (>=0.16.0,<0.17.0)",
-    "pyside6 (>=6.11.1,<7.0.0)"
+    "pyside6 (>=6.11.1,<7.0.0)",
+    "pyinstaller (>=6.21.0,<7.0.0)"
 ]
 
 [tool.pytest.ini_options]

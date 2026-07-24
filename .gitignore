@@ -224,6 +224,10 @@ __marimo__/
 # Machine-local poetry config (cache-dir, virtualenvs settings)
 poetry.toml
 
+# The template above ignores *.spec, but ours is the build configuration --
+# what gets excluded, where the models go, why onedir rather than onefile.
+!pdf-sorter.spec
+
 # EasyOCR model weights (~100MB, downloaded at build time, bundled into the exe)
 models/
 
