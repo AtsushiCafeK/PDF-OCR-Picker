@@ -14,6 +14,9 @@ from pdf_ocr.core.mover import (
     DEFAULT_FOLDER_NAMES,
     AuditLog,
     Routing,
+    clear_sorted_output,
+    copy_file,
+    count_sorted_output,
     move_file,
     unique_destination,
 )
@@ -105,6 +108,89 @@ class TestDryRun:
         source = a_file(tmp_path / "in", "a.pdf")
         a_file(tmp_path / "out", "a.pdf")
         assert move_file(source, tmp_path / "out", dry_run=True).name == "a (2).pdf"
+
+
+class TestCopying:
+    """Copying is what the debug GUI does when previewing how a folder sorts.
+    Tuning is iterative, so the input has to survive the run."""
+
+    def test_the_source_survives(self, tmp_path):
+        source = a_file(tmp_path / "in", "a.pdf")
+        copied = copy_file(source, tmp_path / "out")
+        assert source.exists()
+        assert copied.exists()
+
+    def test_content_is_preserved(self, tmp_path):
+        source = a_file(tmp_path / "in", "a.pdf", b"the original bytes")
+        assert copy_file(source, tmp_path / "out").read_bytes() == b"the original bytes"
+
+    def test_the_destination_folder_is_created(self, tmp_path):
+        source = a_file(tmp_path / "in", "a.pdf")
+        copy_file(source, tmp_path / "out" / "請求書")
+        assert (tmp_path / "out" / "請求書").is_dir()
+
+    def test_a_taken_name_gets_a_suffix(self, tmp_path):
+        """Same rule as moving: two suppliers may send the same filename."""
+        first = a_file(tmp_path / "in-a", "invoice.pdf", b"first")
+        second = a_file(tmp_path / "in-b", "invoice.pdf", b"second")
+        copy_file(first, tmp_path / "out")
+        copy_file(second, tmp_path / "out")
+        contents = sorted(p.read_bytes() for p in (tmp_path / "out").iterdir())
+        assert contents == [b"first", b"second"]
+
+
+class TestClearingSortedOutput:
+    """A preview is re-run after every rule change. A document whose verdict
+    changed would otherwise sit in both its old folder and its new one."""
+
+    def _sorted_tree(self, root):
+        for name in DEFAULT_FOLDER_NAMES.values():
+            a_file(root / name, "a.pdf")
+        return root
+
+    def test_it_reports_what_is_there(self, tmp_path):
+        self._sorted_tree(tmp_path)
+        assert count_sorted_output(tmp_path, DEFAULT_FOLDER_NAMES.values()) == 3
+
+    def test_it_removes_the_previous_run(self, tmp_path):
+        self._sorted_tree(tmp_path)
+        removed = clear_sorted_output(tmp_path, DEFAULT_FOLDER_NAMES.values())
+        assert removed == 3
+        assert count_sorted_output(tmp_path, DEFAULT_FOLDER_NAMES.values()) == 0
+
+    def test_the_folders_themselves_remain(self, tmp_path):
+        self._sorted_tree(tmp_path)
+        clear_sorted_output(tmp_path, DEFAULT_FOLDER_NAMES.values())
+        for name in DEFAULT_FOLDER_NAMES.values():
+            assert (tmp_path / name).is_dir()
+
+    def test_only_pdfs_are_removed(self, tmp_path):
+        """Deliberately narrow, because this deletes files."""
+        folder = tmp_path / DEFAULT_FOLDER_NAMES[Verdict.INVOICE]
+        a_file(folder, "a.pdf")
+        a_file(folder, "notes.txt")
+        clear_sorted_output(tmp_path, DEFAULT_FOLDER_NAMES.values())
+        assert (folder / "notes.txt").exists()
+
+    def test_nothing_outside_the_verdict_folders_is_touched(self, tmp_path):
+        self._sorted_tree(tmp_path)
+        bystander = a_file(tmp_path / "somewhere else", "keep.pdf")
+        at_root = a_file(tmp_path, "root.pdf")
+        clear_sorted_output(tmp_path, DEFAULT_FOLDER_NAMES.values())
+        assert bystander.exists()
+        assert at_root.exists()
+
+    def test_nested_folders_are_left_alone(self, tmp_path):
+        """Only files directly inside a verdict folder, never a whole tree."""
+        nested = a_file(
+            tmp_path / DEFAULT_FOLDER_NAMES[Verdict.INVOICE] / "keep", "deep.pdf"
+        )
+        clear_sorted_output(tmp_path, DEFAULT_FOLDER_NAMES.values())
+        assert nested.exists()
+
+    def test_an_absent_destination_is_not_an_error(self, tmp_path):
+        assert clear_sorted_output(tmp_path / "nope", DEFAULT_FOLDER_NAMES.values()) == 0
+        assert count_sorted_output(tmp_path / "nope", DEFAULT_FOLDER_NAMES.values()) == 0
 
 
 class TestAuditLog:

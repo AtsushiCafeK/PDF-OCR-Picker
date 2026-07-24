@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -82,10 +84,55 @@ def move_file(source: Path, directory: Path, dry_run: bool = False) -> Path:
         # Atomic within a volume: the file is never in both places or neither.
         source.replace(destination)
     else:
-        import shutil
-
         shutil.move(str(source), str(destination))
     return destination
+
+
+def copy_file(source: Path, directory: Path) -> Path:
+    """Copy ``source`` into ``directory``, returning where it went.
+
+    The non-destructive counterpart of :func:`move_file`, for previewing how a
+    folder would be sorted. Tuning is an iterative business -- change a weight,
+    look again -- and that is only possible if the input survives the run.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = unique_destination(directory, source.name)
+    shutil.copy2(source, destination)
+    return destination
+
+
+def clear_sorted_output(root: Path, names: Iterable[str]) -> int:
+    """Delete the PDFs previously sorted into ``root``, returning how many.
+
+    Needed because a preview is re-run after every rule change, and a document
+    that moves from one verdict to another would otherwise be left sitting in
+    both folders -- turning the very thing being inspected into a lie.
+
+    Deliberately narrow: only files directly inside the named verdict folders,
+    only ``.pdf``, and the folders themselves are left in place. Nothing else
+    under ``root`` is touched, and the source folder is never involved.
+    """
+    removed = 0
+    for name in names:
+        directory = root / name
+        if not directory.is_dir():
+            continue
+        for path in directory.glob("*.pdf"):
+            if path.is_file():
+                path.unlink()
+                removed += 1
+    return removed
+
+
+def count_sorted_output(root: Path, names: Iterable[str]) -> int:
+    """How many PDFs :func:`clear_sorted_output` would delete."""
+    return sum(
+        1
+        for name in names
+        if (root / name).is_dir()
+        for path in (root / name).glob("*.pdf")
+        if path.is_file()
+    )
 
 
 class AuditLog:

@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,6 +58,13 @@ from PySide6.QtWidgets import (
 
 from pdf_ocr import DEFAULT_RULES_PATH
 from pdf_ocr.core.extract import DEFAULT_DPI, ExtractionError, extract_page
+from pdf_ocr.core.mover import (
+    DEFAULT_FOLDER_NAMES,
+    Routing,
+    clear_sorted_output,
+    copy_file,
+    count_sorted_output,
+)
 from pdf_ocr.core.normalize import NormalizedText, NormalizeOptions, normalize_blocks
 from pdf_ocr.core.ocr.easy import EasyOcrEngine
 from pdf_ocr.core.score import RuleError, RuleSet, Thresholds, score_page
@@ -274,6 +282,9 @@ class MainWindow(QMainWindow):
         self._worker: ExtractWorker | None = None
         self._suspend_rescore = False
         self._pending_batch: list[int] = []
+        self._batch_running = False
+        self.sort_directory: Path | None = None
+        self._sorted_counts: Counter[Verdict] = Counter()
 
         self.page_view = PageView()
         self.setCentralWidget(self.page_view)
@@ -300,6 +311,32 @@ class MainWindow(QMainWindow):
         self.classify_all_button = QPushButton("Classify all")
         self.classify_all_button.clicked.connect(self._classify_all)
         layout.addWidget(self.classify_all_button)
+
+        # -- sorted preview
+        sort_box = QGroupBox("Sorted copy")
+        sort_layout = QVBoxLayout(sort_box)
+        self.sort_check = QCheckBox("Copy into verdict folders while classifying")
+        self.sort_check.setToolTip(
+            "During 'Classify all', copy each document into 請求書 / _要確認 / "
+            "_その他 under the chosen folder, so a large batch can be reviewed "
+            "the way it will actually look. Copies, never moves -- the source "
+            "folder is left untouched."
+        )
+        self.sort_check.stateChanged.connect(lambda _state: self._update_sort_label())
+        sort_layout.addWidget(self.sort_check)
+
+        choose_row = QHBoxLayout()
+        self.sort_dir_button = QPushButton("Destination...")
+        self.sort_dir_button.clicked.connect(self._choose_sort_directory)
+        choose_row.addWidget(self.sort_dir_button)
+        choose_row.addStretch(1)
+        sort_layout.addLayout(choose_row)
+
+        self.sort_dir_label = QLabel("no destination chosen")
+        self.sort_dir_label.setWordWrap(True)
+        self.sort_dir_label.setStyleSheet("color: grey;")
+        sort_layout.addWidget(self.sort_dir_label)
+        layout.addWidget(sort_box)
 
         # -- verdict readout
         self.verdict_label = QLabel("--")
@@ -556,13 +593,26 @@ class MainWindow(QMainWindow):
         self._thread = None
         self._worker = None
         self.setEnabled_inputs(True)
+
+        if not self._batch_running:
+            return
+
+        # Deal with the document that just finished before starting the next.
+        # This has to happen even when the queue is now empty, or the final
+        # document of a batch would never be labelled or copied -- it is the one
+        # whose completion empties the queue.
+        item = self.file_list.currentItem()
+        if item is not None and self.result is not None:
+            self._annotate(item, self.result)
+            if self.sort_check.isChecked():
+                self._sort_current(self.result)
+
         if self._pending_batch:
-            # The document that just finished is the one to label; only then is
-            # it safe to start the next.
-            item = self.file_list.currentItem()
-            if item is not None and self.result is not None:
-                self._annotate(item, self.result)
             self._advance_batch()
+        else:
+            self._batch_running = False
+            self.statusBar().showMessage(self._batch_summary())
+            self._update_sort_label()
 
     @Slot(object)
     def _on_loaded(self, document: LoadedDocument) -> None:
@@ -801,6 +851,104 @@ class MainWindow(QMainWindow):
         logger.info("wrote %s (comments from the original are not carried over)", path)
         self.statusBar().showMessage(f"Saved {path}")
 
+    # -- sorted preview ----------------------------------------------------
+
+    def _choose_sort_directory(self) -> None:
+        directory = QFileDialog.getExistingDirectory(
+            self, "Where to copy the sorted documents"
+        )
+        if not directory:
+            return
+
+        chosen = Path(directory)
+        source = self._source_directory()
+        if source is not None and (chosen == source or source in chosen.parents):
+            # Copies landing inside the folder being classified would be picked
+            # up as input the next time it is opened, and each run would breed
+            # another generation of duplicates.
+            QMessageBox.warning(
+                self,
+                "Sorted copy",
+                f"{chosen}\n\nis inside the folder being classified. Choose a "
+                f"destination outside it, or the copies will be classified "
+                f"again on the next run.",
+            )
+            return
+
+        self.sort_directory = chosen
+        self.sort_check.setChecked(True)
+        self._update_sort_label()
+
+    def _source_directory(self) -> Path | None:
+        """The folder the listed documents came from, if they share one."""
+        item = self.file_list.item(0)
+        if item is None:
+            return None
+        return Path(item.data(Qt.ItemDataRole.UserRole)).parent
+
+    def _update_sort_label(self) -> None:
+        if self.sort_directory is None:
+            self.sort_dir_label.setText("no destination chosen")
+            return
+        existing = count_sorted_output(self.sort_directory, DEFAULT_FOLDER_NAMES.values())
+        suffix = f"  ({existing} already sorted there)" if existing else ""
+        self.sort_dir_label.setText(f"{self.sort_directory}{suffix}")
+
+    def _prepare_sort_directory(self) -> bool:
+        """Ask before emptying the destination. Returns whether to go ahead.
+
+        A preview gets re-run after every rule change, and a document whose
+        verdict changed would otherwise be left in both its old folder and its
+        new one -- which would make the thing being inspected misleading. So the
+        previous run is cleared first, and since that deletes files, it is
+        confirmed rather than assumed.
+        """
+        if self.sort_directory is None:
+            QMessageBox.information(
+                self, "Sorted copy", "Choose a destination folder first."
+            )
+            return False
+
+        existing = count_sorted_output(self.sort_directory, DEFAULT_FOLDER_NAMES.values())
+        if existing:
+            answer = QMessageBox.question(
+                self,
+                "Sorted copy",
+                f"{self.sort_directory}\n\n"
+                f"already holds {existing} sorted PDF(s) from an earlier run.\n"
+                f"Delete them and sort again?\n\n"
+                f"Only PDFs directly inside "
+                f"{', '.join(DEFAULT_FOLDER_NAMES.values())} are removed. "
+                f"The documents being classified are not touched.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer is not QMessageBox.StandardButton.Yes:
+                return False
+            removed = clear_sorted_output(
+                self.sort_directory, DEFAULT_FOLDER_NAMES.values()
+            )
+            logger.info("cleared %d file(s) from %s", removed, self.sort_directory)
+
+        self._sorted_counts = Counter()
+        return True
+
+    def _sort_current(self, result: ScoreResult) -> None:
+        """Copy the document just classified into its verdict folder."""
+        if self.sort_directory is None or self.document is None:
+            return
+        routing = Routing(self.sort_directory)
+        try:
+            destination = copy_file(
+                self.document.path, routing.directory_for(result.verdict)
+            )
+        except OSError as error:
+            # One unreadable file should not abandon the rest of the batch.
+            logger.error("could not copy %s: %s", self.document.path.name, error)
+            return
+        self._sorted_counts[result.verdict] += 1
+        logger.info("copied %s -> %s", self.document.path.name, destination.parent.name)
+
     # -- batch -------------------------------------------------------------
 
     def _classify_all(self) -> None:
@@ -809,13 +957,23 @@ class MainWindow(QMainWindow):
         Worth the wait on a folder of scans: it answers how many documents even
         have a text layer, and where the score distribution actually splits --
         which is how a threshold gets chosen on evidence rather than by feel.
+
+        With 'Sorted copy' enabled each document is also copied into its verdict
+        folder as it goes, which on a real batch is the difference between
+        reading a column of numbers and seeing the piles the rules would
+        actually produce.
         """
+        if self.sort_check.isChecked() and not self._prepare_sort_directory():
+            return
         self._pending_batch = list(range(self.file_list.count()))
+        self._batch_running = bool(self._pending_batch)
         self._advance_batch()
 
     def _advance_batch(self) -> None:
         if not self._pending_batch:
-            self.statusBar().showMessage("Finished classifying the folder.")
+            self._batch_running = False
+            self.statusBar().showMessage(self._batch_summary())
+            self._update_sort_label()
             return
         row = self._pending_batch.pop(0)
         item = self.file_list.item(row)
@@ -829,6 +987,16 @@ class MainWindow(QMainWindow):
         self.file_list.setCurrentRow(row)
         self.file_list.blockSignals(False)
         self._load(item.data(Qt.ItemDataRole.UserRole))
+
+    def _batch_summary(self) -> str:
+        if not self._sorted_counts:
+            return "Finished classifying the folder."
+        tally = "  ".join(
+            f"{DEFAULT_FOLDER_NAMES[verdict]} {self._sorted_counts[verdict]}"
+            for verdict in Verdict
+            if self._sorted_counts[verdict]
+        )
+        return f"Finished. Copied into {self.sort_directory}:  {tally}"
 
     def _annotate(self, item: QListWidgetItem, result: ScoreResult) -> None:
         name = item.data(Qt.ItemDataRole.UserRole).name
