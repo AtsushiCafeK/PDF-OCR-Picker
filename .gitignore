@@ -216,3 +216,31 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---------------------------------------------------------------
+# PDF_OCR project-specific
+# ---------------------------------------------------------------
+
+# Machine-local poetry config (cache-dir, virtualenvs settings)
+poetry.toml
+
+# EasyOCR model weights (~100MB, downloaded at build time, bundled into the exe)
+models/
+
+# Sample / working data -- invoices may contain confidential information.
+# Never commit real documents. Test fixtures are generated in code instead.
+data/
+samples/
+*.pdf
+
+# Runtime output
+out/
+logs/
+*.log
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
