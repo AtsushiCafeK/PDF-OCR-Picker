@@ -67,17 +67,29 @@ rules:
     note: Carries Korean-language invoices, which print the English word.
 
   # --- Amounts -----------------------------------------------------------
+  # The four-character amount and payment terms use fuzzy matching, not
+  # subsequence. Subsequence survives a character OCR inserts (請求澤書) but not
+  # one it substitutes, and low-resolution scans -- a document exported at ~100
+  # dpi rather than scanned at 300 -- substitute constantly: 請求金額 comes back
+  # as 請求笠額, 支払期限 as 芝払期限. Fuzzy at distance 1 recovers these. It is
+  # confined to four-plus-character patterns because at distance 1 a shorter one
+  # matches unrelated words (税込 vs 税抜), and the design already tightens it
+  # back to exact on text-layer pages, where the characters are not in doubt.
+  #
+  # The three-character title 請求書 cannot join them: it is too short to fuzz
+  # safely, so a substituted title (請求善) is simply lost, and the decision
+  # falls to the amount and payment vocabulary instead.
   - id: amount_seikyu_kingaku
     pattern: 請求金額
     weight: 20
-    match: subsequence
-    window: 7
+    match: fuzzy
+    max_distance: 1
 
   - id: amount_goukei
     pattern: 合計金額
     weight: 10
-    match: subsequence
-    window: 7
+    match: fuzzy
+    max_distance: 1
 
   - id: amount_shouhizei
     pattern: 消費税
@@ -102,21 +114,21 @@ rules:
   - id: pay_kigen
     pattern: 支払期限
     weight: 15
-    match: subsequence
-    window: 7
+    match: fuzzy
+    max_distance: 1
     note: お支払期限 and ご支払期限 both contain this.
 
   - id: pay_kijitsu
     pattern: 支払期日
     weight: 15
-    match: subsequence
-    window: 7
+    match: fuzzy
+    max_distance: 1
 
   - id: pay_kouza
     pattern: 口座番号
     weight: 10
-    match: subsequence
-    window: 7
+    match: fuzzy
+    max_distance: 1
 
   # --- Japanese qualified invoice system ---------------------------------
   - id: touroku_bangou

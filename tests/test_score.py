@@ -63,6 +63,38 @@ class TestOcrDamage:
         assert result.hits[0].pattern == "請求書"
 
 
+class TestSubstitutionErrors:
+    """Low-resolution scans do not insert characters, they replace them:
+    請求金額 comes back as 請求笠額, 支払期限 as 芝払期限. Subsequence matching
+    cannot recover a substitution, only an insertion, so the four-character
+    amount and payment terms match fuzzily instead."""
+
+    def test_a_substituted_amount_term_still_fires_on_a_scan(self, rules):
+        page = make_page([("請求笠額 110,000", 300.0)], source=Source.OCR)
+        fired = {hit.rule_id for hit in score_page(page, rules).hits}
+        assert "amount_seikyu_kingaku" in fired
+
+    def test_a_substituted_payment_term_still_fires_on_a_scan(self, rules):
+        page = make_page([("芝払期限 2026年8月31日", 400.0)], source=Source.OCR)
+        fired = {hit.rule_id for hit in score_page(page, rules).hits}
+        assert "pay_kigen" in fired
+
+    def test_the_same_slack_is_denied_on_a_text_layer(self, rules):
+        """A text layer's characters are exact, so a '請求笠額' there is really
+        that word, not a mis-read 請求金額 -- matching it would be inventing a
+        keyword the document does not contain."""
+        page = make_page([("請求笠額 110,000", 300.0)], source=Source.TEXT_LAYER)
+        fired = {hit.rule_id for hit in score_page(page, rules).hits}
+        assert "amount_seikyu_kingaku" not in fired
+
+    def test_a_two_edit_substitution_is_not_matched(self, rules):
+        """The slack is one edit. 見積金額 is two from 請求金額 and must not be
+        mistaken for it, or a quotation would score as an invoice."""
+        page = make_page([("見積金額 110,000", 300.0)], source=Source.OCR)
+        fired = {hit.rule_id for hit in score_page(page, rules).hits}
+        assert "amount_seikyu_kingaku" not in fired
+
+
 class TestTextLayerIsTrusted:
     def test_loose_matching_is_disabled_for_text_layer_pages(self, rules):
         """Text-layer characters are exact. Loosening the match there cannot

@@ -889,6 +889,19 @@ degraded identically. Real scanners differ in how they feed paper and how much
 their sensors hiss, and a corpus where every page is skewed by the same 0.6
 degrees would prove less than it appears to."""
 
+LOWRES_PROFILES: list[dict] = [
+    {"angle": 0.0, "noise": 2.0, "blur": 0.3, "dpi": 100},
+    {"angle": 0.0, "noise": 3.0, "blur": 0.4, "dpi": 110},
+    {"angle": 0.3, "noise": 2.0, "blur": 0.3, "dpi": 90},
+]
+"""Low-resolution renders, the regime a PDF "printed" through a web app such as
+Google Docs falls into: roughly 90-110 dpi, clean but too coarse for small
+Japanese type. Unlike a physical scan the degradation is almost pure
+resolution -- little skew, little noise -- and that alone is enough to make the
+recogniser substitute characters (請求書 -> 請求善, 支払期限 -> 芝払期限). This
+is what motivated the fuzzy amount and payment rules; keeping the regime in the
+corpus is what stops a future change from quietly breaking them again."""
+
 HARDER = {"easy": "medium", "medium": "hard", "hard": "hard"}
 
 
@@ -900,6 +913,25 @@ def _scanned(layout: Layout, profile: dict) -> Sample:
         expected=layout.expected,
         difficulty=HARDER[layout.difficulty],
         note=f"Scanned. {layout.note}",
+        landscape=layout.landscape,
+        scan=profile,
+    )
+
+
+def _lowres(layout: Layout, profile: dict) -> Sample:
+    """The same layout exported at screen resolution rather than scanned.
+
+    The expected verdict is the document's true type. Some layouts are genuinely
+    lost at this resolution -- a title rotated onto its side at 90 dpi is
+    unreadable -- and the corpus records that honestly as a miss rather than
+    lowering the bar to hide it.
+    """
+    return Sample(
+        name=f"lowres_{layout.name}",
+        draw=layout.draw,
+        expected=layout.expected,
+        difficulty="hard",
+        note=f"Low-resolution render. {layout.note}",
         landscape=layout.landscape,
         scan=profile,
     )
@@ -922,6 +954,9 @@ SAMPLES: list[Sample] = [
     for layout in LAYOUTS
 ] + [
     _scanned(layout, SCAN_PROFILES[index % len(SCAN_PROFILES)])
+    for index, layout in enumerate(LAYOUTS)
+] + [
+    _lowres(layout, LOWRES_PROFILES[index % len(LOWRES_PROFILES)])
     for index, layout in enumerate(LAYOUTS)
 ]
 
