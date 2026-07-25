@@ -22,7 +22,7 @@ from collections import Counter
 from enum import IntEnum
 from pathlib import Path
 
-from pdf_ocr import DEFAULT_RULES_PATH, __version__
+from pdf_ocr import __version__, resolve_rules_path
 from pdf_ocr.core.extract import (
     DEFAULT_DPI,
     MIN_TEXT_LAYER_CHARS,
@@ -107,20 +107,19 @@ def owns_console() -> bool:
         return False
 
 
-def resolve_rules_path(override: Path | None = None) -> Path:
-    """Find the rules file, preferring one the operator can edit.
+GUI_EXECUTABLE_MARKER = "gui"
 
-    A copy sitting beside the executable wins over the bundled default, so a
-    supplier whose invoices are being missed can be handled by adding a keyword
-    on the machine where the problem is, without a rebuild and a redeploy.
+
+def launched_as_gui() -> bool:
+    """Whether this process is the windowed build.
+
+    Both builds run this same module -- one bundle rather than two, because a
+    second one would duplicate PyTorch and the OCR models. They are told apart
+    by the name of the executable, which is set in the spec file.
     """
-    if override is not None:
-        return override
-    if getattr(sys, "frozen", False):
-        beside = Path(sys.executable).parent / "rules.yaml"
-        if beside.exists():
-            return beside
-    return DEFAULT_RULES_PATH
+    if not getattr(sys, "frozen", False):
+        return False
+    return GUI_EXECUTABLE_MARKER in Path(sys.executable).stem.lower()
 
 
 def build_engine(arguments: argparse.Namespace) -> EasyOcrEngine | None:
@@ -247,6 +246,21 @@ def command_batch(arguments: argparse.Namespace) -> int:
     return ExitCode.ERROR if counts["error"] else ExitCode.INVOICE
 
 
+def command_gui(arguments: argparse.Namespace) -> int:
+    """Open the tuning GUI.
+
+    A subcommand rather than a second executable: a separate bundle would carry
+    its own copy of PyTorch and the OCR models, roughly doubling what has to be
+    distributed. Sharing one bundle costs only Qt.
+    """
+    # Imported here, not at module scope, so a batch run does not pay for
+    # loading Qt -- and so the command-line tool still works on a machine where
+    # PySide6 is missing.
+    from pdf_ocr.gui import main as gui_main
+
+    return gui_main(arguments.rules)
+
+
 def command_diag(arguments: argparse.Namespace) -> int:
     """Report what a folder is made of, without moving anything.
 
@@ -363,6 +377,10 @@ def build_parser() -> argparse.ArgumentParser:
             "  pdf-sorter diag C:\\in\n"
             "      report what a folder is made of; moves nothing\n"
             "\n"
+            "  pdf-sorter gui\n"
+            "      open the tuning window: see why each document scored what it\n"
+            "      did, adjust keywords, and preview how a folder would sort\n"
+            "\n"
             "Prefer 'batch' over calling 'classify' in a loop: loading the OCR\n"
             "models takes several seconds, and batch pays that once per run\n"
             "rather than once per file.\n"
@@ -370,8 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Keywords and thresholds come from rules.yaml beside this executable;\n"
             "edit it to handle a supplier whose invoices are being missed.\n"
             "\n"
-            "This is the command-line tool. The tuning GUI is a separate\n"
-            "development program and is not part of this executable.\n"
+            "For a window instead of a command line, run 'pdf-sorter gui'.\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -407,6 +424,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_shared_arguments(diag)
     diag.set_defaults(function=command_diag)
 
+    gui = subparsers.add_parser("gui", help="open the tuning window")
+    gui.add_argument("--rules", type=Path, help="path to a rules.yaml")
+    gui.add_argument("-v", "--verbose", action="store_true")
+    gui.set_defaults(function=command_gui)
+
     return parser
 
 
@@ -416,25 +438,34 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
 
     if not argv:
-        # What a double-click produces. Argparse's usage error is correct and
-        # completely useless here, because the window carrying it closes with
-        # the process; the reasonable reading of "no arguments" is that someone
-        # wants to know what this program does.
-        parser.print_help()
-        if owns_console():
-            print("\nPress Enter to close this window.")
-            with contextlib.suppress(EOFError, KeyboardInterrupt):
-                input()
-        return ExitCode.ERROR
+        # The windowed build is the same program under a different name, and
+        # the people it is for open it by double-clicking. Printing help at
+        # them would be doubly useless: it is not what they want, and there is
+        # no console to print it to.
+        if launched_as_gui():
+            argv = ["gui"]
+        else:
+            # What a double-click on the console build produces. Argparse's
+            # usage error is correct and completely useless here, because the
+            # window carrying it closes with the process; the reasonable reading
+            # of "no arguments" is that someone wants to know what this does.
+            parser.print_help()
+            if owns_console():
+                print("\nPress Enter to close this window.")
+                with contextlib.suppress(EOFError, KeyboardInterrupt):
+                    input()
+            return ExitCode.ERROR
 
     arguments = parser.parse_args(argv)
 
     # stderr, always: stdout is reserved for the JSON that the caller parses.
-    logging.basicConfig(
-        stream=sys.stderr,
-        level=logging.INFO if arguments.verbose else logging.WARNING,
-        format="%(levelname)s %(name)s: %(message)s",
-    )
+    # A windowed build has neither, and its log goes to the GUI's own pane.
+    if sys.stderr is not None:
+        logging.basicConfig(
+            stream=sys.stderr,
+            level=logging.INFO if arguments.verbose else logging.WARNING,
+            format="%(levelname)s %(name)s: %(message)s",
+        )
 
     try:
         return int(arguments.function(arguments))

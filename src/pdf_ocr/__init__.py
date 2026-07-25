@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 __version__ = "0.1.0"
@@ -11,6 +12,26 @@ PACKAGE_ROOT = Path(__file__).parent
 DEFAULT_RULES_PATH = PACKAGE_ROOT / "rules.yaml"
 """The rules shipped with the package.
 
-The command-line tool prefers a rules.yaml sitting beside the executable, so a
-deployed copy can be tuned without a rebuild; this is the fallback.
+Both front ends prefer a rules.yaml sitting beside the executable, so a deployed
+copy can be tuned without a rebuild; this is the fallback.
 """
+
+
+def resolve_rules_path(override: Path | None = None) -> Path:
+    """Find the rules file, preferring one the operator can edit.
+
+    A copy sitting beside the executable wins over the bundled default, so a
+    supplier whose invoices are being missed can be handled by adding a keyword
+    on the machine where the problem is, without a rebuild and a redeploy.
+
+    Shared by the command-line tool and the debug GUI. If they disagreed about
+    where the rules live, tuning in the GUI would silently fail to change what
+    the sorter does -- which is the one thing the GUI exists to prevent.
+    """
+    if override is not None:
+        return override
+    if getattr(sys, "frozen", False):
+        beside = Path(sys.executable).parent / "rules.yaml"
+        if beside.exists():
+            return beside
+    return DEFAULT_RULES_PATH

@@ -190,9 +190,11 @@ class TestNoArguments:
         assert "0 invoice" in out
         assert "9 error" in out
 
-    def test_the_help_says_the_gui_is_not_in_here(self, capsys):
+    def test_the_help_points_at_the_gui(self, capsys):
+        """Someone who double-clicks this is often looking for a window."""
         main([])
-        assert "not part of this executable" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "gui" in out
 
     def test_it_does_not_block_when_not_launched_from_explorer(self, capsys):
         """Pausing is only ever right when the window is about to vanish; doing
@@ -222,7 +224,76 @@ class TestDiag:
         assert len(list(inbox.glob("*.pdf"))) == 3
 
 
+class TestGuiSubcommand:
+    """The GUI ships inside the same executable. A second bundle would carry
+    its own PyTorch and OCR models -- some 550 MB duplicated to gain nothing."""
+
+    def test_it_dispatches_to_the_gui(self, monkeypatch):
+        opened = []
+        monkeypatch.setattr(
+            "pdf_ocr.gui.main", lambda rules=None: opened.append(rules) or 0
+        )
+        assert main(["gui"]) == 0
+        assert opened == [None]
+
+    def test_an_explicit_rules_file_is_passed_through(self, tmp_path, monkeypatch):
+        opened = []
+        monkeypatch.setattr(
+            "pdf_ocr.gui.main", lambda rules=None: opened.append(rules) or 0
+        )
+        rules = tmp_path / "custom.yaml"
+        main(["gui", "--rules", str(rules)])
+        assert opened == [rules]
+
+    def test_the_windowed_build_is_recognised_by_its_name(self, monkeypatch):
+        """Both executables run this module; the filename is what tells them
+        apart, so a double-click on the windowed one opens the window."""
+        from pdf_ocr.cli import launched_as_gui
+
+        monkeypatch.setattr("pdf_ocr.cli.sys.frozen", True, raising=False)
+        monkeypatch.setattr(
+            "pdf_ocr.cli.sys.executable", r"C:\app\pdf-sorter-gui.exe", raising=False
+        )
+        assert launched_as_gui() is True
+
+        monkeypatch.setattr(
+            "pdf_ocr.cli.sys.executable", r"C:\app\pdf-sorter.exe", raising=False
+        )
+        assert launched_as_gui() is False
+
+    def test_running_from_source_is_never_the_windowed_build(self, monkeypatch):
+        """Otherwise a checkout in a folder named 'gui' would behave oddly."""
+        from pdf_ocr.cli import launched_as_gui
+
+        monkeypatch.delattr("pdf_ocr.cli.sys.frozen", raising=False)
+        assert launched_as_gui() is False
+
+
 class TestRulesResolution:
+    def test_both_front_ends_look_in_the_same_place(self):
+        """If the GUI and the sorter disagreed about where rules live, tuning
+        in the GUI would silently fail to change what the sorter does -- the one
+        thing the GUI exists to prevent."""
+        import pdf_ocr.cli as cli_module
+        import pdf_ocr.gui as gui_module
+
+        assert cli_module.resolve_rules_path is gui_module.resolve_rules_path
+
+    def test_a_copy_beside_the_executable_wins(self, tmp_path, monkeypatch):
+        """How a deployed copy gets tuned without a rebuild."""
+        from pdf_ocr import DEFAULT_RULES_PATH, resolve_rules_path
+
+        beside = tmp_path / "rules.yaml"
+        beside.write_text("rules: []", encoding="utf-8")
+        monkeypatch.setattr("pdf_ocr.sys.frozen", True, raising=False)
+        monkeypatch.setattr(
+            "pdf_ocr.sys.executable", str(tmp_path / "pdf-sorter.exe"), raising=False
+        )
+        assert resolve_rules_path() == beside
+
+        beside.unlink()
+        assert resolve_rules_path() == DEFAULT_RULES_PATH
+
     def test_an_explicit_rules_file_is_honoured(self, tmp_path, capsys):
         """Editing rules.yaml beside the exe is how a missed supplier gets fixed
         without a rebuild, so the override has to actually take effect."""

@@ -25,9 +25,7 @@ from PyInstaller.utils.hooks import collect_data_files
 
 ONEFILE = os.environ.get("PDF_SORTER_ONEFILE") == "1"
 
-# Whole packages the classifier never imports. The debug GUI is a development
-# tool and is not shipped, so PySide6 -- several hundred megabytes of it --
-# stays out.
+# Whole packages nothing here imports.
 #
 # Submodules of torch are deliberately NOT excluded, however tempting the size
 # is. Excluding torch.distributed builds without complaint and then dies on the
@@ -35,8 +33,6 @@ ONEFILE = os.environ.get("PDF_SORTER_ONEFILE") == "1"
 # `import torch`. PyTorch's internal imports are dense enough that pruning them
 # trades a smaller bundle for a failure that only appears in production.
 EXCLUDES = [
-    "PySide6",
-    "shiboken6",
     "matplotlib",
     "tkinter",
     "IPython",
@@ -44,6 +40,35 @@ EXCLUDES = [
     "notebook",
     "pytest",
     "_pytest",
+]
+
+# Qt subsystems the GUI never touches. Unlike torch, these are safe to drop:
+# they are optional modules with no import path from QtWidgets, and PySide6 as
+# installed is 634 MB of which the window here uses only Core, Gui and Widgets.
+# WebEngineCore alone is 195 MB of browser that nothing opens.
+EXCLUDES += [
+    "PySide6.QtWebEngineCore",
+    "PySide6.QtWebEngineWidgets",
+    "PySide6.QtWebEngineQuick",
+    "PySide6.QtWebChannel",
+    "PySide6.QtWebSockets",
+    "PySide6.QtWebView",
+    "PySide6.QtQml",
+    "PySide6.QtQuick",
+    "PySide6.QtQuick3D",
+    "PySide6.QtQuickWidgets",
+    "PySide6.QtMultimedia",
+    "PySide6.QtMultimediaWidgets",
+    "PySide6.Qt3DCore",
+    "PySide6.Qt3DRender",
+    "PySide6.QtCharts",
+    "PySide6.QtDataVisualization",
+    "PySide6.QtBluetooth",
+    "PySide6.QtPositioning",
+    "PySide6.QtSql",
+    "PySide6.QtTest",
+    "PySide6.QtDesigner",
+    "PySide6.QtHelp",
 ]
 
 datas = [
@@ -67,27 +92,66 @@ analysis = Analysis(
 
 pyz = PYZ(analysis.pure)
 
-# console=True in both layouts. The Power Automate contract is a JSON object on
-# stdout, and a windowed build has no stdout to write it to -- --noconsole would
-# not merely hide a window, it would remove the interface. A console that
-# flashes is suppressed on the caller's side instead, by running the process
-# hidden, or avoided entirely by reading the --out JSONL file.
 COMMON = dict(
-    name="pdf-sorter",
     debug=False,
     strip=False,
     # UPX is left off: it mangles some of the PyTorch DLLs, and the failure
     # shows up at run time on the target machine rather than here at build time.
     upx=False,
-    console=True,
 )
 
+# Two executables over one set of dependencies.
+#
+# pdf-sorter.exe keeps its console because the Power Automate contract is a JSON
+# object on stdout, and a windowed build has no stdout to write it to --
+# --noconsole would not hide an interface, it would remove one.
+#
+# pdf-sorter-gui.exe is windowed, for the people who open the tuning window by
+# double-clicking it and have no use for a console behind it. It runs the same
+# module and recognises itself by its filename.
+#
+# They are separate EXE objects sharing one COLLECT rather than two bundles,
+# because a second bundle would carry its own PyTorch and its own OCR models --
+# some 550 MB duplicated to gain nothing.
 if ONEFILE:
-    exe = EXE(
-        pyz, analysis.scripts, analysis.binaries, analysis.datas, [], **COMMON
+    # One self-contained file cannot also be a second self-contained file
+    # without doubling in size, so the onefile layout ships the console build
+    # only; `pdf-sorter.exe gui` still opens the window.
+    console_exe = EXE(
+        pyz,
+        analysis.scripts,
+        analysis.binaries,
+        analysis.datas,
+        [],
+        name="pdf-sorter",
+        console=True,
+        **COMMON,
     )
 else:
-    exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, **COMMON)
+    console_exe = EXE(
+        pyz,
+        analysis.scripts,
+        [],
+        exclude_binaries=True,
+        name="pdf-sorter",
+        console=True,
+        **COMMON,
+    )
+    gui_exe = EXE(
+        pyz,
+        analysis.scripts,
+        [],
+        exclude_binaries=True,
+        name="pdf-sorter-gui",
+        console=False,
+        **COMMON,
+    )
     collection = COLLECT(
-        exe, analysis.binaries, analysis.datas, strip=False, upx=False, name="pdf-sorter"
+        console_exe,
+        gui_exe,
+        analysis.binaries,
+        analysis.datas,
+        strip=False,
+        upx=False,
+        name="pdf-sorter",
     )

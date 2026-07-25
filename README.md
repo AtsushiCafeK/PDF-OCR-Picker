@@ -245,9 +245,21 @@ UTF-8バイトを通すと**復元不能な文字化けになる**ためです�
 
 ### 3.3 デバッグGUI（ルール調整用）
 
+開発環境から：
+
 ```bash
 poetry run python -m pdf_ocr.gui
 ```
+
+配布したexeから（Python不要）：
+
+```bash
+pdf-sorter-gui.exe
+```
+
+`pdf-sorter-gui.exe` はコンソールを出さない版で、**ダブルクリックで起動できます。**
+コンソール版から `pdf-sorter.exe gui` と叩いても同じ画面が開きます。
+どちらも同じバンドル内の同じプログラムで、実行ファイル名で動作を切り替えているだけです。
 
 `File → Open folder...` でPDFのあるフォルダを開きます。
 
@@ -364,15 +376,30 @@ rules:
 poetry run python -m tools.build_exe
 ```
 
-`dist/pdf-sorter/` に、exe・OCRモデル・`rules.yaml` が揃った状態で出力されます。
+`dist/pdf-sorter/` に、exe 2つ・OCRモデル・`rules.yaml` が揃った状態で出力されます。
 **このフォルダごとコピーすれば、Pythonもネットワークも不要で動作します。**
+
+```
+dist/pdf-sorter/
+├─ pdf-sorter.exe       CLI（Power Automate から呼ぶ）
+├─ pdf-sorter-gui.exe   デバッグGUI（ダブルクリックで起動）
+├─ rules.yaml           ← 編集すると両方に反映される
+├─ models/              OCRモデル
+└─ _internal/           依存関係（2つのexeで共有）
+```
 
 ### onedir と onefile
 
 | | ディスク | 起動時間 | スキャン1件（実測） |
 |---|---|---|---|
-| **onedir**（既定） | 816 MB | 0.5 秒 | 16.7 秒 |
-| **onefile** | 353 MB | 7.3 秒 | 21.3 秒 |
+| **onedir**（既定） | 958 MB | 0.5 秒 | 16.7 秒 |
+| **onefile** | 353 MB＋ | 7.3 秒 | 21.3 秒 |
+
+onedir には `pdf-sorter.exe`（CLI）と `pdf-sorter-gui.exe`（GUI）の**2つが入り、依存関係は共有**します。
+GUIを別バンドルにするとPyTorchとOCRモデルが二重に入り、550MBほど無駄になるためです。
+Qtの追加分は92MB（未使用のWebEngine等を除外済み。除外しないと634MB）。
+
+onefile は自己完結ファイルを2つ作れないためCLI版のみですが、`pdf-sorter.exe gui` でGUIは開けます。
 
 ```bash
 poetry run python -m tools.build_exe --onefile
@@ -392,7 +419,8 @@ onefileは圧縮されるため半分以下のサイズですが、**起動の�
   ビルドは無警告で通り、**実行時に落ちます**（`torch.utils.data` が読んでいるため）。
   配布先で初めて発覚する最悪の失敗なので、specにも理由を記載しています
 - **UPX圧縮は使いません。** PyTorchのDLLを壊すことがあり、これも実行時にしか分かりません
-- exeをダブルクリックするとヘルプが表示されます（GUIは起動しません。GUIはexeに含まれていません）
+- `pdf-sorter.exe` をダブルクリックするとヘルプが表示されます。GUIを開きたい場合は `pdf-sorter-gui.exe` の方をダブルクリックしてください
+- **Qtのサブモジュール除外は安全です。** QtWidgetsからimport経路のない独立モジュールのため、torchの場合と違って実行時に落ちることはありません
 
 ---
 
@@ -412,7 +440,7 @@ src/pdf_ocr/
 │   └─ mover.py       ファイル移動・衝突回避・監査ログ
 ├─ rules.yaml         判定ルール（exeには埋め込まず外部配置）
 ├─ cli.py             CLI（PyInstallerのエントリポイント）
-└─ gui.py             デバッグGUI（PySide6、exeには含めない）
+└─ gui.py             デバッグGUI（PySide6。CLIと同じバンドルに同梱）
 
 tools/
 ├─ sample_pdfs.py     試験用PDF生成器

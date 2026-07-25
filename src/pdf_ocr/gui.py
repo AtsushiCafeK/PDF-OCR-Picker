@@ -56,7 +56,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pdf_ocr import DEFAULT_RULES_PATH
+from pdf_ocr import resolve_rules_path
 from pdf_ocr.core.extract import DEFAULT_DPI, ExtractionError, extract_page
 from pdf_ocr.core.mover import (
     DEFAULT_FOLDER_NAMES,
@@ -1004,13 +1004,20 @@ class MainWindow(QMainWindow):
         item.setForeground(QBrush(QColor(VERDICT_COLORS[result.verdict])))
 
 
-def main() -> None:
-    logging.basicConfig(level=logging.INFO)
-    application = QApplication(sys.argv)
-    window = MainWindow(DEFAULT_RULES_PATH)
+def main(rules_path: Path | None = None) -> int:
+    # A windowed build has no console, so sys.stderr is None and the default
+    # stream handler would fail on its first record. The GUI shows its own log
+    # pane regardless, which is where these end up.
+    if sys.stderr is None:
+        logging.getLogger().addHandler(logging.NullHandler())
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+    application = QApplication.instance() or QApplication(sys.argv)
+    window = MainWindow(rules_path or resolve_rules_path())
     window.show()
-    sys.exit(application.exec())
+    return application.exec()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
