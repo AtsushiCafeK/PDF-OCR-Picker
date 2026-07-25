@@ -235,6 +235,7 @@ models/
 # Never commit real documents. Test fixtures are generated in code instead.
 # あえてサンプルは公開
 # data/
+data/Test_result
 # samples/
 # *.pdf
 
