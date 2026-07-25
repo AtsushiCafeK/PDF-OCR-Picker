@@ -34,7 +34,13 @@ def application():
 def window(application):
     window = MainWindow(DEFAULT_RULES_PATH)
     yield window
+    # Close, then let Qt actually carry out the deferred deletion. Leaving the
+    # C++ object alive to be collected later -- long after the test's Python
+    # references are gone -- is what destabilises the offscreen platform on
+    # Windows and shows up as an access violation during an unrelated test.
     window.close()
+    window.deleteLater()
+    application.processEvents()
 
 
 class TestNeutralLabels:
@@ -238,6 +244,101 @@ class TestSortedCopy:
         )
         assert window._prepare_sort_directory() is False
         assert (folder / "stale.pdf").exists()
+
+
+def _finish_one(window, path, lines):
+    """Put the window where the worker leaves off after one document.
+
+    Used with the same seam as test_the_last_document: set the state a completed
+    load would leave, then call _on_thread_finished directly, so nothing has to
+    spawn a real OCR thread against a fake PDF.
+    """
+    from PySide6.QtGui import QPixmap
+
+    from pdf_ocr.core.normalize import normalize_blocks
+    from pdf_ocr.core.score import RuleSet, score_page
+    from pdf_ocr.gui import LoadedDocument
+    from tests.conftest import make_page
+
+    page = make_page(lines)
+    window.document = LoadedDocument(
+        path=path, page=page, image=QPixmap(), scale=1.0, elapsed=0.3
+    )
+    window.result = score_page(page, RuleSet.load(DEFAULT_RULES_PATH))
+    window.normalized = normalize_blocks(page.blocks, window._current_ruleset().normalize)
+    window._current_path = path
+
+
+class TestDebugLog:
+    """The run leaves a readable log.txt in the destination, so a large batch
+    can be debugged after the window is closed."""
+
+    def test_a_log_is_written_beside_the_copies(self, window, tmp_path):
+        only = tmp_path / "in" / "a.pdf"
+        only.parent.mkdir()
+        only.write_bytes(b"pdf")
+        window._populate([only])
+        window.sort_directory = tmp_path / "out"
+        window.sort_check.setChecked(True)
+        assert window._prepare_sort_directory() is True
+
+        _finish_one(window, only, [("請求書", 50.0), ("振込先 みずほ", 400.0)])
+        window._pending_batch = []
+        window._batch_running = True
+        window._on_thread_finished()
+
+        text = (tmp_path / "out" / "log.txt").read_text(encoding="utf-8")
+        assert "a.pdf" in text
+        assert "title_seikyusho" in text  # the scoring process
+        assert "みずほ" in text  # the recognised text
+        assert "outcome" in text  # the footer, so the log was closed
+
+    def test_no_log_without_sorted_copy(self, window):
+        """The log lives in the destination; with sorted copy off there is
+        nowhere for it to go, so none is opened."""
+        assert window._debug_log is None
+
+
+class TestStop:
+    def test_stop_starts_disabled(self, window):
+        assert window.stop_button.isEnabled() is False
+
+    def test_stop_drains_the_queue_and_ends_after_the_current_file(self, window, tmp_path):
+        only = tmp_path / "in" / "a.pdf"
+        only.parent.mkdir()
+        only.write_bytes(b"pdf")
+        window._populate([only])
+
+        # Stand mid-batch, as _classify_all would leave things with work queued.
+        window._pending_batch = [1, 2]
+        window._batch_running = True
+        window.stop_button.setEnabled(True)
+
+        window._stop_batch()
+        assert window._stop_requested is True
+        assert window._pending_batch == []
+        assert window.stop_button.isEnabled() is False
+
+        # The document in flight completing must end the run, not advance.
+        _finish_one(window, only, [("請求書", 50.0)])
+        window._on_thread_finished()
+        assert window._batch_running is False
+
+    def test_a_stopped_run_is_reported_as_stopped_in_the_log(self, window, tmp_path):
+        only = tmp_path / "in" / "a.pdf"
+        only.parent.mkdir()
+        only.write_bytes(b"pdf")
+        window._populate([only])
+        window.sort_directory = tmp_path / "out"
+        window.sort_check.setChecked(True)
+        window._prepare_sort_directory()
+
+        window._batch_running = True
+        window._pending_batch = [1]
+        window._stop_batch()
+        _finish_one(window, only, [("請求書", 50.0)])
+        window._on_thread_finished()
+        assert "STOPPED" in (tmp_path / "out" / "log.txt").read_text(encoding="utf-8")
 
 
 class TestControlsFeedScoring:

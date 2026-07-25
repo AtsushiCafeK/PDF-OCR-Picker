@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
 )
 
 from pdf_ocr import resolve_rules_path
+from pdf_ocr.core.debuglog import DebugLog
 from pdf_ocr.core.extract import DEFAULT_DPI, ExtractionError, extract_page
 from pdf_ocr.core.mover import (
     DEFAULT_FOLDER_NAMES,
@@ -296,6 +297,10 @@ class MainWindow(QMainWindow):
         self._suspend_rescore = False
         self._pending_batch: list[int] = []
         self._batch_running = False
+        self._stop_requested = False
+        self._current_path: Path | None = None
+        self._last_error: str | None = None
+        self._debug_log: DebugLog | None = None
         self.sort_directory: Path | None = None
         self._sorted_counts: Counter[Verdict] = Counter()
 
@@ -321,9 +326,20 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Documents"))
         layout.addWidget(self.file_list, 1)
 
+        run_row = QHBoxLayout()
         self.classify_all_button = QPushButton("Classify all")
         self.classify_all_button.clicked.connect(self._classify_all)
-        layout.addWidget(self.classify_all_button)
+        run_row.addWidget(self.classify_all_button, 1)
+
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.setEnabled(False)
+        self.stop_button.setToolTip(
+            "Stop the run. OCR cannot be interrupted mid-page, so the document "
+            "being read now finishes; nothing after it is started."
+        )
+        self.stop_button.clicked.connect(self._stop_batch)
+        run_row.addWidget(self.stop_button)
+        layout.addLayout(run_row)
 
         # -- sorted preview
         sort_box = QGroupBox("Sorted copy")
@@ -574,6 +590,7 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage(f"Reading {path.name}...")
         self.setEnabled_inputs(False)
+        self._current_path = path
 
         thread = QThread(self)
         worker = ExtractWorker(
@@ -615,17 +632,29 @@ class MainWindow(QMainWindow):
         # document of a batch would never be labelled or copied -- it is the one
         # whose completion empties the queue.
         item = self.file_list.currentItem()
-        if item is not None and self.result is not None:
+        if item is not None and self.result is not None and self.document is not None:
             self._annotate(item, self.result)
-            if self.sort_check.isChecked():
-                self._sort_current(self.result)
+            destination = self._sort_current(self.result) if self.sort_check.isChecked() else None
+            if self._debug_log is not None and self.normalized is not None:
+                self._debug_log.document(
+                    self.document.path,
+                    self.result,
+                    self.normalized,
+                    self._current_ruleset(),
+                    elapsed=self.document.elapsed,
+                    destination=destination,
+                )
+        elif self._debug_log is not None and self._current_path is not None:
+            # The load failed; record that, so a run's log accounts for every
+            # file rather than silently dropping the ones that could not be read.
+            self._debug_log.failure(self._current_path, self._last_error or "unreadable")
 
-        if self._pending_batch:
+        if self._stop_requested:
+            self._finish_batch(stopped=True)
+        elif self._pending_batch:
             self._advance_batch()
         else:
-            self._batch_running = False
-            self.statusBar().showMessage(self._batch_summary())
-            self._update_sort_label()
+            self._finish_batch()
 
     @Slot(object)
     def _on_loaded(self, document: LoadedDocument) -> None:
@@ -642,7 +671,13 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_load_failed(self, message: str) -> None:
+        # Clear the result too, not just the document: otherwise a failed load
+        # in the middle of a batch would leave the previous file's result in
+        # place, and the batch step would label and copy the failed file with
+        # the wrong verdict.
         self.document = None
+        self.result = None
+        self._last_error = message
         self.page_view.clear()
         logger.error("%s", message)
         self.statusBar().showMessage(message)
@@ -944,12 +979,24 @@ class MainWindow(QMainWindow):
             logger.info("cleared %d file(s) from %s", removed, self.sort_directory)
 
         self._sorted_counts = Counter()
+
+        # A run-long debug log, written beside the copies it describes. It lives
+        # at the destination root, so clearing the verdict subfolders above never
+        # touches it; opening in write mode gives each run a fresh one.
+        self._close_debug_log()
+        try:
+            self._debug_log = DebugLog(self.sort_directory / "log.txt", VERDICT_LABELS)
+            self._debug_log.header(self._current_ruleset(), self._source_directory())
+        except OSError as error:
+            # A log that cannot be written is not a reason to abandon the run.
+            logger.error("could not open the debug log: %s", error)
+            self._debug_log = None
         return True
 
-    def _sort_current(self, result: ScoreResult) -> None:
+    def _sort_current(self, result: ScoreResult) -> Path | None:
         """Copy the document just classified into its verdict folder."""
         if self.sort_directory is None or self.document is None:
-            return
+            return None
         routing = Routing(self.sort_directory)
         try:
             destination = copy_file(
@@ -958,9 +1005,15 @@ class MainWindow(QMainWindow):
         except OSError as error:
             # One unreadable file should not abandon the rest of the batch.
             logger.error("could not copy %s: %s", self.document.path.name, error)
-            return
+            return None
         self._sorted_counts[result.verdict] += 1
         logger.info("copied %s -> %s", self.document.path.name, destination.parent.name)
+        return destination
+
+    def _close_debug_log(self) -> None:
+        if self._debug_log is not None:
+            self._debug_log.close()
+            self._debug_log = None
 
     # -- batch -------------------------------------------------------------
 
@@ -979,14 +1032,40 @@ class MainWindow(QMainWindow):
         if self.sort_check.isChecked() and not self._prepare_sort_directory():
             return
         self._pending_batch = list(range(self.file_list.count()))
+        self._stop_requested = False
         self._batch_running = bool(self._pending_batch)
+        self.stop_button.setEnabled(self._batch_running)
         self._advance_batch()
+
+    def _stop_batch(self) -> None:
+        """Ask the run to stop. It ends once the current document is done.
+
+        OCR of a page cannot be interrupted cleanly, so rather than kill the
+        worker mid-read -- which risks a half-written copy or a wedged thread --
+        the request simply drains the queue and lets the document in flight
+        finish.
+        """
+        if not self._batch_running:
+            return
+        self._stop_requested = True
+        self._pending_batch = []
+        self.stop_button.setEnabled(False)
+        self.statusBar().showMessage("Stopping after the current document...")
+
+    def _finish_batch(self, stopped: bool = False) -> None:
+        self._batch_running = False
+        self._stop_requested = False
+        self.stop_button.setEnabled(False)
+        if self._debug_log is not None:
+            self._debug_log.footer(self._sorted_counts, stopped=stopped)
+            self._close_debug_log()
+        prefix = "Stopped" if stopped else "Finished"
+        self.statusBar().showMessage(self._batch_summary(prefix))
+        self._update_sort_label()
 
     def _advance_batch(self) -> None:
         if not self._pending_batch:
-            self._batch_running = False
-            self.statusBar().showMessage(self._batch_summary())
-            self._update_sort_label()
+            self._finish_batch()
             return
         row = self._pending_batch.pop(0)
         item = self.file_list.item(row)
@@ -1001,15 +1080,15 @@ class MainWindow(QMainWindow):
         self.file_list.blockSignals(False)
         self._load(item.data(Qt.ItemDataRole.UserRole))
 
-    def _batch_summary(self) -> str:
+    def _batch_summary(self, prefix: str = "Finished") -> str:
         if not self._sorted_counts:
-            return "Finished classifying the folder."
+            return f"{prefix} classifying the folder."
         tally = "  ".join(
             f"{DEFAULT_FOLDER_NAMES[verdict]} {self._sorted_counts[verdict]}"
             for verdict in Verdict
             if self._sorted_counts[verdict]
         )
-        return f"Finished. Copied into {self.sort_directory}:  {tally}"
+        return f"{prefix}. Copied into {self.sort_directory}:  {tally}   (log.txt written)"
 
     def _annotate(self, item: QListWidgetItem, result: ScoreResult) -> None:
         name = item.data(Qt.ItemDataRole.UserRole).name
