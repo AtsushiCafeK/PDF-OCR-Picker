@@ -8,6 +8,13 @@ Power Automate から呼び出せる CLI（exe）と、判定ルールを調整�
 - **動作環境** Windows / Python 3.12
 - **配布形態** PyInstaller の onedir（Python不要、フォルダごとコピーで移設可能）
 
+> **請求書以外にも使えます。**
+> このツールは請求書を前提に開発していますが、判定エンジンは「特定の語が文書内に在るか」だけを見ており、
+> **文書の種類そのものには依存していません。** そのため `rules.yaml` のキーワードを書き換えるだけで、
+> 領収書・見積書・注文書などの選別にも転用できます（日本語・英語の文書が対象）。
+> デバッグGUIの判定結果は、そのことが分かるように「請求書」ではなく中立的な **Match / Review / Other** と表示します。
+> 詳しくは [4. ルールの調整](#4-ルールの調整) を参照してください。
+
 ---
 
 ## 1. 設計の考え方
@@ -381,6 +388,39 @@ rules:
 先読み・後読みを使います。
 
 不正なルールがあると**問題を全部まとめて**報告し、読み込みを拒否します。
+
+### 請求書以外の文書に転用する
+
+エンジンは語の有無しか見ないので、`rules.yaml` を丸ごと入れ替えるだけで別の文書の選別器になります。
+たとえば**見積書**を拾いたいなら、タイトル・金額・有効期限などの語を陽性に、請求書側の語を除外に置きます。
+
+```yaml
+thresholds: { high: 70, low: 40 }
+
+rules:
+  # 陽性：見積書の語彙
+  - { id: title,    pattern: 見積書,   weight: 30, match: subsequence, window: 6 }
+  - { id: title_at_top, pattern: 見積書, weight: 20, match: subsequence, window: 6, scope: top_quarter }
+  - { id: amount,   pattern: 見積金額, weight: 20, match: subsequence, window: 7 }
+  - { id: validity, pattern: 有効期限, weight: 15, match: subsequence, window: 7 }
+  - { id: delivery, pattern: 納期,     weight: 10, match: exact }
+  # 陰性：請求書やメールを弾く
+  - { id: exclude_invoice, pattern: 請求書, weight: -50, match: exact }
+  - { id: exclude_mail,    pattern: 差出人, weight: -40, match: exact }
+```
+
+```bash
+poetry run pdf-sorter batch "C:\in" --rules mitsumori.yaml --out result.jsonl --dry-run
+```
+
+デバッグGUIの判定結果は請求書に限定しない **Match / Review / Other** 表示なので、
+このカスタムルールをそのままGUIで調整できます。
+
+> **現時点での制約（1回の実行＝1種類）**
+> スコアは1本しか出ないため、「請求書／見積書／契約書」の**多クラス同時仕分けはできません**。
+> 1種類ずつルールを切り替えて実行する形になります。また `--move-to` の振り分け先フォルダ名
+> （`請求書/` `_要確認/` `_その他/`）とCLIの終了コード・JSONの `verdict` は請求書向けの名前のままです。
+> これらを目的ごとに切り替えたい場合は、別途 `rules.yaml` に目的情報を持たせる拡張が必要です。
 
 ---
 

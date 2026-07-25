@@ -82,6 +82,19 @@ VERDICT_COLORS = {
     Verdict.OTHER: "#8a2b2b",
 }
 
+# Shown in place of the internal verdict names. The engine calls a hit "invoice"
+# because that is what it was built for, but it only ever tests whether the
+# keywords are present -- so with a different rules.yaml the same machinery sorts
+# receipts or quotations just as well. The window says "Match" rather than
+# "invoice" so that someone tuning it for another document type is not told their
+# receipts are invoices. ("Match", not "Success": the other two outcomes are
+# valid results, not failures -- a receipt landing in Other is a correct reject.)
+VERDICT_LABELS = {
+    Verdict.INVOICE: "Match",
+    Verdict.NEEDS_REVIEW: "Review",
+    Verdict.OTHER: "Other",
+}
+
 BOX_NEUTRAL = QColor(90, 140, 210, 110)
 BOX_POSITIVE = QColor(30, 140, 70, 230)
 BOX_NEGATIVE = QColor(190, 50, 50, 230)
@@ -674,7 +687,7 @@ class MainWindow(QMainWindow):
         )
 
     def _show_result(self, result: ScoreResult) -> None:
-        self.verdict_label.setText(result.verdict.value)
+        self.verdict_label.setText(VERDICT_LABELS[result.verdict])
         self.verdict_label.setStyleSheet(
             f"font-size: 20px; font-weight: bold; color: {VERDICT_COLORS[result.verdict]};"
         )
@@ -1000,7 +1013,7 @@ class MainWindow(QMainWindow):
 
     def _annotate(self, item: QListWidgetItem, result: ScoreResult) -> None:
         name = item.data(Qt.ItemDataRole.UserRole).name
-        item.setText(f"{name}   [{result.verdict.value} {result.score:.0f}]")
+        item.setText(f"{name}   [{VERDICT_LABELS[result.verdict]} {result.score:.0f}]")
         item.setForeground(QBrush(QColor(VERDICT_COLORS[result.verdict])))
 
 

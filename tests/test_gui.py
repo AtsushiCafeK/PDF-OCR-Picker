@@ -37,6 +37,23 @@ def window(application):
     window.close()
 
 
+class TestNeutralLabels:
+    """The window names the top outcome for what it is -- a match -- not
+    'invoice', so someone tuning the rules for receipts or quotations is not
+    told their receipts are invoices."""
+
+    def test_the_result_reads_neutrally(self, window):
+        from pdf_ocr.gui import VERDICT_LABELS
+
+        assert VERDICT_LABELS[Verdict.INVOICE] == "Match"
+        assert "invoice" not in {v.lower() for v in VERDICT_LABELS.values()}
+
+    def test_every_verdict_has_a_label(self, window):
+        from pdf_ocr.gui import VERDICT_LABELS
+
+        assert set(VERDICT_LABELS) == set(Verdict)
+
+
 class TestConstruction:
     def test_the_window_builds(self, window):
         assert window.windowTitle()
