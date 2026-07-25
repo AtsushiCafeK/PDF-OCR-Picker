@@ -331,6 +331,16 @@ class MainWindow(QMainWindow):
         self.classify_all_button.clicked.connect(self._classify_all)
         run_row.addWidget(self.classify_all_button, 1)
 
+        self.run_from_button = QPushButton("Run from selected")
+        self.run_from_button.setToolTip(
+            "Classify from the selected document to the end of the list, rather "
+            "than the whole folder. After a Stop, select where to pick up and "
+            "resume here; after changing a rule, re-run from the document you "
+            "were looking at without paying for the ones before it again."
+        )
+        self.run_from_button.clicked.connect(self._classify_from_selected)
+        run_row.addWidget(self.run_from_button, 1)
+
         self.stop_button = QPushButton("Stop")
         self.stop_button.setEnabled(False)
         self.stop_button.setToolTip(
@@ -503,6 +513,7 @@ class MainWindow(QMainWindow):
         for caption, slot in (
             ("Add rule", self._add_rule),
             ("Remove rule", self._remove_rule),
+            ("Open...", self._open_rules_file),
             ("Reload from file", self._reload_rules),
             ("Save as...", self._save_rules_as),
         ):
@@ -615,6 +626,7 @@ class MainWindow(QMainWindow):
         self.file_list.setEnabled(enabled)
         self.force_ocr_check.setEnabled(enabled)
         self.classify_all_button.setEnabled(enabled)
+        self.run_from_button.setEnabled(enabled)
 
     @Slot()
     def _on_thread_finished(self) -> None:
@@ -843,15 +855,47 @@ class MainWindow(QMainWindow):
         self._suspend_rescore = False
         self._on_rules_edited()
 
-    def _reload_rules(self) -> None:
-        try:
-            self.ruleset = RuleSet.load(self.rules_path)
-        except (RuleError, OSError) as error:
-            QMessageBox.warning(self, "Rules", str(error))
-            return
+    def _apply_loaded_ruleset(self, ruleset: RuleSet) -> None:
+        """Push a freshly loaded rule set into the table, the controls and the
+        score, all at once."""
+        self.ruleset = ruleset
         self._load_rules_into_table()
         self._sync_controls_from_rules()
         self._rescore()
+
+    def _open_rules_file(self) -> None:
+        """Load a rules file the user picks -- typically one saved earlier with
+        'Save as...'.
+
+        Deliberately does NOT change what 'the default' is: self.rules_path is
+        left pointing at the file the window started with, so 'Reload from file'
+        still returns there. That keeps tuning cheap to abandon -- open a saved
+        set to try it, reload to get back to the default -- which is the whole
+        reason unsaved edits are allowed to reset rather than persist.
+        """
+        start = str(self.rules_path.parent)
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open a rules file", start, "YAML (*.yaml *.yml)"
+        )
+        if not path:
+            return
+        try:
+            ruleset = RuleSet.load(Path(path))
+        except (RuleError, OSError) as error:
+            QMessageBox.warning(self, "Rules", str(error))
+            return
+        self._apply_loaded_ruleset(ruleset)
+        self.statusBar().showMessage(
+            f"Loaded {path}   ('Reload from file' still returns to the default)"
+        )
+
+    def _reload_rules(self) -> None:
+        try:
+            ruleset = RuleSet.load(self.rules_path)
+        except (RuleError, OSError) as error:
+            QMessageBox.warning(self, "Rules", str(error))
+            return
+        self._apply_loaded_ruleset(ruleset)
 
     def _sync_controls_from_rules(self) -> None:
         self._suspend_rescore = True
@@ -1029,12 +1073,36 @@ class MainWindow(QMainWindow):
         reading a column of numbers and seeing the piles the rules would
         actually produce.
         """
+        self._start_batch(range(self.file_list.count()))
+
+    def _classify_from_selected(self) -> None:
+        """Classify from the selected document to the end, not the whole folder.
+
+        The tuning loop this serves: watch a run, Stop when a document scores
+        wrong, add or adjust a rule, then resume from that document -- without
+        paying the OCR cost of everything before it a second time.
+        """
+        start = self.file_list.currentRow()
+        if start < 0:
+            self.statusBar().showMessage("Select a document to start from first.")
+            return
+        self._start_batch(range(start, self.file_list.count()))
+
+    def _start_batch(self, rows) -> None:
+        """Run a classification over the given rows of the list."""
+        rows = list(rows)
+        if not rows:
+            return
+        # Sorted copy, when on, is prepared once per run: the destination is
+        # cleared and a fresh log opened. A 'Run from selected' therefore also
+        # starts a clean copy of that partial run rather than merging into an
+        # earlier one -- simpler to reason about than a half-updated folder.
         if self.sort_check.isChecked() and not self._prepare_sort_directory():
             return
-        self._pending_batch = list(range(self.file_list.count()))
+        self._pending_batch = rows
         self._stop_requested = False
-        self._batch_running = bool(self._pending_batch)
-        self.stop_button.setEnabled(self._batch_running)
+        self._batch_running = True
+        self.stop_button.setEnabled(True)
         self._advance_batch()
 
     def _stop_batch(self) -> None:

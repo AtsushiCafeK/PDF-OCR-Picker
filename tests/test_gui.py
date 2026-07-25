@@ -30,17 +30,42 @@ def application():
     return QApplication.instance() or QApplication([])
 
 
-@pytest.fixture
-def window(application):
+@pytest.fixture(scope="module")
+def _shared_window(application):
+    """One window for the whole module.
+
+    Creating and destroying a QMainWindow per test churns Qt's offscreen
+    platform hard enough that, on Windows, it eventually faults with an access
+    violation during an unrelated test. Building it once and resetting its state
+    between tests removes that churn -- and the reset below is what keeps the
+    tests independent despite the sharing.
+    """
     window = MainWindow(DEFAULT_RULES_PATH)
     yield window
-    # Close, then let Qt actually carry out the deferred deletion. Leaving the
-    # C++ object alive to be collected later -- long after the test's Python
-    # references are gone -- is what destabilises the offscreen platform on
-    # Windows and shows up as an access violation during an unrelated test.
     window.close()
     window.deleteLater()
     application.processEvents()
+
+
+@pytest.fixture
+def window(_shared_window):
+    w = _shared_window
+    # Return the shared window to a clean state, so each test starts as if it
+    # had a fresh one.
+    w._close_debug_log()
+    w._batch_running = False
+    w._pending_batch = []
+    w._stop_requested = False
+    w.stop_button.setEnabled(False)
+    w.sort_check.setChecked(False)
+    w.sort_directory = None
+    w.force_ocr_check.setChecked(False)
+    w.document = w.result = w.normalized = None
+    w._current_path = None
+    w._last_error = None
+    w.file_list.clear()
+    w._reload_rules()  # resets the ruleset, the table, the sliders and the toggles
+    return w
 
 
 class TestNeutralLabels:
@@ -74,6 +99,68 @@ class TestConstruction:
             window.normalize_checks["strip_whitespace"].isChecked()
             is window.ruleset.normalize.strip_whitespace
         )
+
+
+class TestOpenAndReload:
+    """You can load a saved rules file, and reload always returns to the
+    default -- so tuning that is not saved is cheap to abandon."""
+
+    def _write_rules(self, tmp_path, high, low):
+        path = tmp_path / "tuned.yaml"
+        path.write_text(
+            f"thresholds: {{high: {high}, low: {low}}}\n"
+            "rules:\n"
+            "  - {id: t, pattern: 請求書, weight: 40, match: subsequence, window: 6}\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def test_open_applies_the_loaded_thresholds(self, window, tmp_path, monkeypatch):
+        loaded = self._write_rules(tmp_path, high=88, low=33)
+        monkeypatch.setattr(
+            "pdf_ocr.gui.QFileDialog.getOpenFileName", lambda *a, **k: (str(loaded), "")
+        )
+        window._open_rules_file()
+        assert window.high_slider.value() == 88
+        assert window.low_slider.value() == 33
+        assert len(window.ruleset.rules) == 1
+
+    def test_open_does_not_change_the_default(self, window, tmp_path, monkeypatch):
+        """The point the user asked for: reload still goes back to the default,
+        so opening a file is easy to undo."""
+        default_high = window.high_slider.value()
+        loaded = self._write_rules(tmp_path, high=88, low=33)
+        monkeypatch.setattr(
+            "pdf_ocr.gui.QFileDialog.getOpenFileName", lambda *a, **k: (str(loaded), "")
+        )
+        window._open_rules_file()
+        assert window.high_slider.value() == 88
+
+        window._reload_rules()
+        assert window.high_slider.value() == default_high
+
+    def test_cancelling_open_changes_nothing(self, window, monkeypatch):
+        before = window.high_slider.value()
+        monkeypatch.setattr(
+            "pdf_ocr.gui.QFileDialog.getOpenFileName", lambda *a, **k: ("", "")
+        )
+        window._open_rules_file()
+        assert window.high_slider.value() == before
+
+    def test_a_broken_file_is_reported_not_applied(self, window, tmp_path, monkeypatch):
+        before = list(window.ruleset.rules)
+        broken = tmp_path / "broken.yaml"
+        broken.write_text("rules: [{id: x, weight: 1}]", encoding="utf-8")  # no pattern
+        monkeypatch.setattr(
+            "pdf_ocr.gui.QFileDialog.getOpenFileName", lambda *a, **k: (str(broken), "")
+        )
+        warned = []
+        monkeypatch.setattr(
+            "pdf_ocr.gui.QMessageBox.warning", lambda *a, **k: warned.append(a)
+        )
+        window._open_rules_file()
+        assert warned
+        assert window.ruleset.rules == before
 
 
 class TestRulesRoundTrip:
@@ -297,6 +384,46 @@ class TestDebugLog:
         """The log lives in the destination; with sorted copy off there is
         nowhere for it to go, so none is opened."""
         assert window._debug_log is None
+
+
+class TestRunFromSelected:
+    """Classify from the selected document to the end -- to resume after a Stop
+    or re-check from a document after changing a rule."""
+
+    def _populate(self, window, tmp_path, count):
+        source = tmp_path / "in"
+        source.mkdir()
+        for i in range(count):
+            (source / f"{i}.pdf").write_bytes(b"pdf")
+        window._populate(sorted(source.glob("*.pdf")))
+        return source
+
+    def test_it_queues_from_the_selected_row_to_the_end(self, window, tmp_path):
+        self._populate(window, tmp_path, 5)
+        window.file_list.setCurrentRow(2)
+        # Prevent the real load from spawning an OCR thread on a fake PDF.
+        started = []
+        window._load = lambda path: started.append(path)  # type: ignore[assignment]
+        window._classify_from_selected()
+        # Row 2 was popped and handed to _load; rows 3 and 4 remain queued.
+        assert window._pending_batch == [3, 4]
+        assert window._batch_running is True
+
+    def test_it_needs_a_selection(self, window, tmp_path):
+        self._populate(window, tmp_path, 3)
+        window.file_list.setCurrentRow(-1)
+        window._classify_from_selected()
+        assert window._batch_running is False
+        assert "Select" in window.statusBar().currentMessage()
+
+    def test_the_button_disables_during_a_run(self, window, tmp_path):
+        self._populate(window, tmp_path, 3)
+        window.file_list.setCurrentRow(0)
+        window._load = lambda path: None  # type: ignore[assignment]
+        window._classify_from_selected()
+        # _load ran with inputs disabled; run_from is toggled with the others.
+        window.setEnabled_inputs(False)
+        assert window.run_from_button.isEnabled() is False
 
 
 class TestStop:
