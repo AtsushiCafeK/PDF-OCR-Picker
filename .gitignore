@@ -233,9 +233,10 @@ models/
 
 # Sample / working data -- invoices may contain confidential information.
 # Never commit real documents. Test fixtures are generated in code instead.
-data/
-samples/
-*.pdf
+# あえてサンプルは公開
+# data/
+# samples/
+# *.pdf
 
 # Runtime output
 out/
