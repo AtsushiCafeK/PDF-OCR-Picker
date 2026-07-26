@@ -220,7 +220,29 @@ poetry run pdf-sorter diag "C:\in" --pretty
 | `--no-ocr` | OCRを行わない（テキスト層のみ、高速） |
 | `--recursive` | サブフォルダも対象にする |
 | `--dpi <n>` | OCR時のラスタライズ解像度（既定300） |
+| `--config <file>` | 既定フォルダの config.yaml を差し替える |
 | `-v` | 進捗を stderr に出す |
+
+**フォルダの事前指定（config.yaml）**
+
+毎回フォルダを引数で渡す代わりに、**exeと同じフォルダに `config.yaml` を置いて既定値を設定**できます。
+引数を省略するとこの値にフォールバックするため、Power Automate 側は `pdf-sorter.exe batch` の一行で済みます。
+
+```yaml
+# config.yaml（exeの横に置く。マシン固有なのでリポジトリには含めない）
+input_dir: C:\in
+output_dir: C:\sorted
+log: C:\logs\result.jsonl
+```
+
+```bash
+pdf-sorter batch          # 上記3つを config.yaml から読む
+pdf-sorter batch "C:\別のフォルダ"   # 明示した引数が config より優先される
+```
+
+デバッグGUIで選んだ参照フォルダ・コピー先も、この `config.yaml` に**自動保存**されます。
+GUIで一度設定すれば、次回のGUI起動時にもCLI（PA）でも同じフォルダが既定になります
+（`rules.yaml` はキーワード、`config.yaml` はフォルダ、と役割が分かれています）。
 
 ### 3.2 Power Automate との連携
 

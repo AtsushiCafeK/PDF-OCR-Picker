@@ -231,7 +231,7 @@ class TestGuiSubcommand:
     def test_it_dispatches_to_the_gui(self, monkeypatch):
         opened = []
         monkeypatch.setattr(
-            "pdf_ocr.gui.main", lambda rules=None: opened.append(rules) or 0
+            "pdf_ocr.gui.main", lambda rules=None, config=None: opened.append(rules) or 0
         )
         assert main(["gui"]) == 0
         assert opened == [None]
@@ -239,7 +239,7 @@ class TestGuiSubcommand:
     def test_an_explicit_rules_file_is_passed_through(self, tmp_path, monkeypatch):
         opened = []
         monkeypatch.setattr(
-            "pdf_ocr.gui.main", lambda rules=None: opened.append(rules) or 0
+            "pdf_ocr.gui.main", lambda rules=None, config=None: opened.append(rules) or 0
         )
         rules = tmp_path / "custom.yaml"
         main(["gui", "--rules", str(rules)])
@@ -267,6 +267,58 @@ class TestGuiSubcommand:
 
         monkeypatch.delattr("pdf_ocr.cli.sys.frozen", raising=False)
         assert launched_as_gui() is False
+
+
+class TestConfigDefaults:
+    """A configured folder lets a Power Automate step be just
+    'pdf-sorter.exe batch', with the folders already known."""
+
+    def _config(self, tmp_path, **fields):
+        lines = [f"{k}: {str(v)}" for k, v in fields.items()]
+        path = tmp_path / "config.yaml"
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return path
+
+    def test_batch_uses_the_configured_input_folder(self, tmp_path, capsys):
+        inbox = tmp_path / "in"
+        sample_pdf(inbox, "invoice_01_centered")
+        config = self._config(tmp_path, input_dir=inbox)
+        code = main(["batch", "--no-ocr", "--config", str(config)])
+        assert code == ExitCode.INVOICE
+        assert stdout_json(capsys)["files"] == 1
+
+    def test_batch_uses_the_configured_destination(self, tmp_path):
+        inbox = tmp_path / "in"
+        sample_pdf(inbox, "invoice_01_centered")
+        out = tmp_path / "sorted"
+        config = self._config(tmp_path, input_dir=inbox, output_dir=out)
+        main(["batch", "--no-ocr", "--config", str(config)])
+        assert (out / DEFAULT_FOLDER_NAMES[Verdict.INVOICE]).exists()
+        assert list(inbox.glob("*.pdf")) == []
+
+    def test_an_explicit_folder_overrides_the_config(self, tmp_path, capsys):
+        configured = tmp_path / "configured"
+        sample_pdf(configured, "invoice_01_centered")
+        explicit = tmp_path / "explicit"
+        sample_pdf(explicit, "invoice_09_korean")
+        sample_pdf(explicit, "other_01_quotation")
+        config = self._config(tmp_path, input_dir=configured)
+        main(["batch", str(explicit), "--no-ocr", "--config", str(config)])
+        assert stdout_json(capsys)["files"] == 2  # from explicit, not configured
+
+    def test_batch_without_a_folder_or_config_reports_the_gap(self, tmp_path, capsys):
+        empty_config = tmp_path / "config.yaml"
+        code = main(["batch", "--no-ocr", "--config", str(empty_config)])
+        assert code == ExitCode.ERROR
+        assert "error" in stdout_json(capsys)
+
+    def test_the_configured_log_is_written(self, tmp_path):
+        inbox = tmp_path / "in"
+        sample_pdf(inbox, "invoice_01_centered")
+        log = tmp_path / "audit.jsonl"
+        config = self._config(tmp_path, input_dir=inbox, log=log)
+        main(["batch", "--no-ocr", "--config", str(config)])
+        assert log.exists()
 
 
 class TestRulesResolution:

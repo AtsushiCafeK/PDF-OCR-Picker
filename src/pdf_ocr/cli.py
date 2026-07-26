@@ -22,7 +22,8 @@ from collections import Counter
 from enum import IntEnum
 from pathlib import Path
 
-from pdf_ocr import __version__, resolve_rules_path
+from pdf_ocr import __version__, resolve_config_path, resolve_rules_path
+from pdf_ocr.core.config import Config
 from pdf_ocr.core.extract import (
     DEFAULT_DPI,
     MIN_TEXT_LAYER_CHARS,
@@ -122,6 +123,15 @@ def launched_as_gui() -> bool:
     return GUI_EXECUTABLE_MARKER in Path(sys.executable).stem.lower()
 
 
+def load_config(arguments: argparse.Namespace) -> Config:
+    """The installation's default folders, so an explicit argument is optional.
+
+    A configured default is what lets a Power Automate step be just
+    ``pdf-sorter.exe batch``; an explicit argument always wins over it.
+    """
+    return Config.load(resolve_config_path(getattr(arguments, "config", None)))
+
+
 def build_engine(arguments: argparse.Namespace) -> EasyOcrEngine | None:
     """One engine per process, or none at all if OCR is switched off."""
     if arguments.no_ocr:
@@ -155,6 +165,9 @@ def classify_one(path: Path, engine, rules: RuleSet, arguments: argparse.Namespa
 def command_classify(arguments: argparse.Namespace) -> int:
     """Classify one file, reporting on stdout and through the exit code."""
     rules = RuleSet.load(resolve_rules_path(arguments.rules))
+    config = load_config(arguments)
+    move_to = arguments.move_to or config.output_dir
+    log = arguments.log or config.log
     engine = build_engine(arguments)
 
     try:
@@ -165,13 +178,13 @@ def command_classify(arguments: argparse.Namespace) -> int:
         return ExitCode.ERROR
 
     destination = None
-    if arguments.move_to is not None:
-        routing = Routing(arguments.move_to)
+    if move_to is not None:
+        routing = Routing(move_to)
         destination = move_file(
             arguments.path, routing.directory_for(result.verdict), arguments.dry_run
         )
 
-    with AuditLog(arguments.log) as audit:
+    with AuditLog(log) as audit:
         entry = audit.record(
             arguments.path,
             result,
@@ -187,18 +200,27 @@ def command_classify(arguments: argparse.Namespace) -> int:
 def command_batch(arguments: argparse.Namespace) -> int:
     """Classify every PDF in a folder, paying the model load once."""
     rules = RuleSet.load(resolve_rules_path(arguments.rules))
-    engine = build_engine(arguments)
-    routing = Routing(arguments.move_to) if arguments.move_to else None
+    config = load_config(arguments)
+    directory = arguments.directory or config.input_dir
+    if directory is None:
+        emit({"error": "no folder given and no input_dir configured"})
+        logger.error("give a folder, or set input_dir in config.yaml")
+        return ExitCode.ERROR
+    move_to = arguments.move_to or config.output_dir
+    out = arguments.out or config.log
 
-    paths = sorted(arguments.directory.rglob("*.pdf") if arguments.recursive
-                   else arguments.directory.glob("*.pdf"))
+    engine = build_engine(arguments)
+    routing = Routing(move_to) if move_to else None
+
+    paths = sorted(directory.rglob("*.pdf") if arguments.recursive
+                   else directory.glob("*.pdf"))
     if not paths:
-        logger.warning("no PDFs found in %s", arguments.directory)
+        logger.warning("no PDFs found in %s", directory)
 
     counts: Counter[str] = Counter()
     started = time.perf_counter()
 
-    with AuditLog(arguments.out) as audit:
+    with AuditLog(out) as audit:
         for path in paths:
             try:
                 result, elapsed = classify_one(path, engine, rules, arguments)
@@ -229,7 +251,7 @@ def command_batch(arguments: argparse.Namespace) -> int:
             )
 
     summary = {
-        "directory": str(arguments.directory),
+        "directory": str(directory),
         "files": len(paths),
         "elapsed": round(time.perf_counter() - started, 2),
         "dry_run": arguments.dry_run,
@@ -240,7 +262,7 @@ def command_batch(arguments: argparse.Namespace) -> int:
         "read_from": {
             source.value: counts[f"read:{source.value}"] for source in Source
         },
-        "log": str(arguments.out) if arguments.out else None,
+        "log": str(out) if out else None,
     }
     emit(summary)
     return ExitCode.ERROR if counts["error"] else ExitCode.INVOICE
@@ -258,7 +280,7 @@ def command_gui(arguments: argparse.Namespace) -> int:
     # PySide6 is missing.
     from pdf_ocr.gui import main as gui_main
 
-    return gui_main(arguments.rules)
+    return gui_main(arguments.rules, arguments.config)
 
 
 def command_diag(arguments: argparse.Namespace) -> int:
@@ -269,10 +291,16 @@ def command_diag(arguments: argparse.Namespace) -> int:
     is going to cost seconds of OCR rather than milliseconds.
     """
     rules = RuleSet.load(resolve_rules_path(arguments.rules))
+    config = load_config(arguments)
+    directory = arguments.directory or config.input_dir
+    if directory is None:
+        emit({"error": "no folder given and no input_dir configured"})
+        logger.error("give a folder, or set input_dir in config.yaml")
+        return ExitCode.ERROR
     engine = build_engine(arguments)
 
-    paths = sorted(arguments.directory.rglob("*.pdf") if arguments.recursive
-                   else arguments.directory.glob("*.pdf"))
+    paths = sorted(directory.rglob("*.pdf") if arguments.recursive
+                   else directory.glob("*.pdf"))
 
     rows: list[dict] = []
     for path in paths:
@@ -296,7 +324,7 @@ def command_diag(arguments: argparse.Namespace) -> int:
     text_layer = sum(1 for row in scored if row["read_from"] == Source.TEXT_LAYER.value)
     emit(
         {
-            "directory": str(arguments.directory),
+            "directory": str(directory),
             "files": len(paths),
             "with_text_layer": text_layer,
             "needing_ocr": len(scored) - text_layer,
@@ -316,6 +344,11 @@ def command_diag(arguments: argparse.Namespace) -> int:
 
 def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--rules", type=Path, help="path to a rules.yaml")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        help="path to a config.yaml of default folders (default: beside the exe)",
+    )
     parser.add_argument("--dpi", type=int, default=DEFAULT_DPI)
     parser.add_argument(
         "--min-text-chars",
@@ -407,7 +440,12 @@ def build_parser() -> argparse.ArgumentParser:
     batch = subparsers.add_parser(
         "batch", help="classify a folder, loading the OCR models only once"
     )
-    batch.add_argument("directory", type=Path)
+    batch.add_argument(
+        "directory",
+        type=Path,
+        nargs="?",
+        help="folder to classify (default: input_dir from config.yaml)",
+    )
     batch.add_argument("--out", type=Path, help="write one JSONL record per file here")
     batch.add_argument("--recursive", action="store_true")
     add_move_arguments(batch)
@@ -417,7 +455,12 @@ def build_parser() -> argparse.ArgumentParser:
     diag = subparsers.add_parser(
         "diag", help="report what a folder is made of; moves nothing"
     )
-    diag.add_argument("directory", type=Path)
+    diag.add_argument(
+        "directory",
+        type=Path,
+        nargs="?",
+        help="folder to inspect (default: input_dir from config.yaml)",
+    )
     diag.add_argument("--recursive", action="store_true")
     diag.add_argument("--pretty", action="store_true")
     diag.set_defaults(dry_run=True, move_to=None)
@@ -426,6 +469,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     gui = subparsers.add_parser("gui", help="open the tuning window")
     gui.add_argument("--rules", type=Path, help="path to a rules.yaml")
+    gui.add_argument("--config", type=Path, help="path to a config.yaml of default folders")
     gui.add_argument("-v", "--verbose", action="store_true")
     gui.set_defaults(function=command_gui)
 

@@ -31,7 +31,7 @@ def application():
 
 
 @pytest.fixture(scope="module")
-def _shared_window(application):
+def _shared_window(application, tmp_path_factory):
     """One window for the whole module.
 
     Creating and destroying a QMainWindow per test churns Qt's offscreen
@@ -39,8 +39,12 @@ def _shared_window(application):
     violation during an unrelated test. Building it once and resetting its state
     between tests removes that churn -- and the reset below is what keeps the
     tests independent despite the sharing.
+
+    The config path is a throwaway, so a test that remembers a folder writes to
+    a temp file rather than the package's config.yaml.
     """
-    window = MainWindow(DEFAULT_RULES_PATH)
+    config_path = tmp_path_factory.mktemp("gui") / "config.yaml"
+    window = MainWindow(DEFAULT_RULES_PATH, config_path)
     yield window
     window.close()
     window.deleteLater()
@@ -49,9 +53,14 @@ def _shared_window(application):
 
 @pytest.fixture
 def window(_shared_window):
+    from pdf_ocr.core.config import Config
+
     w = _shared_window
     # Return the shared window to a clean state, so each test starts as if it
     # had a fresh one.
+    w.config = Config(path=w.config.path)
+    if w.config.path.exists():
+        w.config.path.unlink()
     w._close_debug_log()
     w._batch_running = False
     w._pending_batch = []
@@ -384,6 +393,56 @@ class TestDebugLog:
         """The log lives in the destination; with sorted copy off there is
         nowhere for it to go, so none is opened."""
         assert window._debug_log is None
+
+
+class TestRemembersFolders:
+    """The folders a person picks are remembered, so they are the defaults next
+    time -- and the command line, sharing the config, inherits them."""
+
+    def test_choosing_a_destination_is_remembered(self, window, tmp_path, monkeypatch):
+        out = tmp_path / "sorted"
+        monkeypatch.setattr(
+            "pdf_ocr.gui.QFileDialog.getExistingDirectory",
+            lambda *a, **k: str(out),
+        )
+        window._choose_sort_directory()
+        assert window.config.output_dir == out
+        # Written to disk, so the command line and the next launch see it.
+        from pdf_ocr.core.config import Config
+
+        assert Config.load(window.config.path).output_dir == out
+
+    def test_opening_a_folder_is_remembered(self, window, tmp_path, monkeypatch):
+        inbox = tmp_path / "in"
+        inbox.mkdir()
+        (inbox / "a.pdf").write_bytes(b"pdf")
+        monkeypatch.setattr(
+            "pdf_ocr.gui.QFileDialog.getExistingDirectory",
+            lambda *a, **k: str(inbox),
+        )
+        window._open_folder()
+        assert window.config.input_dir == inbox
+
+    def test_a_configured_input_folder_is_listed_at_startup(self, tmp_path):
+        """Listed, not classified: selecting a row would start OCR, which a
+        person opening the window has not asked for."""
+        from pdf_ocr.core.config import Config
+        from pdf_ocr.gui import MainWindow
+
+        inbox = tmp_path / "in"
+        inbox.mkdir()
+        (inbox / "a.pdf").write_bytes(b"pdf")
+        (inbox / "b.pdf").write_bytes(b"pdf")
+        config_path = tmp_path / "config.yaml"
+        Config(path=config_path, input_dir=inbox).save()
+
+        w = MainWindow(DEFAULT_RULES_PATH, config_path)
+        try:
+            assert w.file_list.count() == 2
+            assert w.file_list.currentRow() == -1  # nothing selected -> no OCR
+        finally:
+            w.close()
+            w.deleteLater()
 
 
 class TestRunFromSelected:

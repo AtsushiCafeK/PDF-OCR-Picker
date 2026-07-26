@@ -56,7 +56,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pdf_ocr import resolve_rules_path
+from pdf_ocr import resolve_config_path, resolve_rules_path
+from pdf_ocr.core.config import Config
 from pdf_ocr.core.debuglog import DebugLog
 from pdf_ocr.core.extract import DEFAULT_DPI, ExtractionError, extract_page
 from pdf_ocr.core.mover import (
@@ -280,13 +281,16 @@ class QtLogHandler(logging.Handler):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, rules_path: Path) -> None:
+    def __init__(self, rules_path: Path, config_path: Path | None = None) -> None:
         super().__init__()
         self.setWindowTitle("PDF invoice classifier -- debug")
         self.resize(1500, 950)
 
         self.rules_path = rules_path
         self.ruleset = RuleSet.load(rules_path)
+        # The installation's remembered folders, shared with the command line so
+        # a person sets them once and Power Automate inherits them.
+        self.config = Config.load(config_path or resolve_config_path())
         self.engine = EasyOcrEngine()
 
         self.document: LoadedDocument | None = None
@@ -301,7 +305,9 @@ class MainWindow(QMainWindow):
         self._current_path: Path | None = None
         self._last_error: str | None = None
         self._debug_log: DebugLog | None = None
-        self.sort_directory: Path | None = None
+        # Start from the remembered destination, if any, so a person who set it
+        # last time does not have to choose it again.
+        self.sort_directory: Path | None = self.config.output_dir
         self._sorted_counts: Counter[Verdict] = Counter()
 
         self.page_view = PageView()
@@ -313,7 +319,17 @@ class MainWindow(QMainWindow):
         self._install_logging()
 
         self._load_rules_into_table()
-        self.statusBar().showMessage("Open a PDF or a folder to begin.")
+        self._update_sort_label()
+        if self.config.input_dir and self.config.input_dir.is_dir():
+            # List the remembered folder, but do not auto-select -- selecting a
+            # row would start OCR on it, and a person opening the window has not
+            # asked for that yet.
+            self._populate(sorted(self.config.input_dir.glob("*.pdf")), select_first=False)
+            self.statusBar().showMessage(
+                f"{self.file_list.count()} document(s) from {self.config.input_dir}"
+            )
+        else:
+            self.statusBar().showMessage("Open a PDF or a folder to begin.")
 
     # -- construction ------------------------------------------------------
 
@@ -570,19 +586,34 @@ class MainWindow(QMainWindow):
             self._populate([Path(path)])
 
     def _open_folder(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "Open folder")
+        start = str(self.config.input_dir) if self.config.input_dir else ""
+        directory = QFileDialog.getExistingDirectory(self, "Open folder", start)
         if directory:
+            self._remember_input_dir(Path(directory))
             self._populate(sorted(Path(directory).glob("*.pdf")))
 
-    def _populate(self, paths: list[Path]) -> None:
+    def _remember_input_dir(self, directory: Path) -> None:
+        """Persist the chosen input folder, so it is the default next time."""
+        self.config.input_dir = directory
+        self._save_config()
+
+    def _save_config(self) -> None:
+        try:
+            self.config.save()
+        except OSError as error:
+            # Remembering folders is a convenience; failing to persist should
+            # not interrupt the work in front of the user.
+            logger.warning("could not save config: %s", error)
+
+    def _populate(self, paths: list[Path], select_first: bool = True) -> None:
         self.file_list.clear()
         for path in paths:
             item = QListWidgetItem(path.name)
             item.setData(Qt.ItemDataRole.UserRole, path)
             self.file_list.addItem(item)
-        if paths:
+        if paths and select_first:
             self.file_list.setCurrentRow(0)
-        else:
+        elif not paths:
             self.statusBar().showMessage("No PDFs found in that folder.")
 
     def _on_file_selected(self, current: QListWidgetItem | None, _previous=None) -> None:
@@ -946,8 +977,9 @@ class MainWindow(QMainWindow):
     # -- sorted preview ----------------------------------------------------
 
     def _choose_sort_directory(self) -> None:
+        start = str(self.config.output_dir) if self.config.output_dir else ""
         directory = QFileDialog.getExistingDirectory(
-            self, "Where to copy the sorted documents"
+            self, "Where to copy the sorted documents", start
         )
         if not directory:
             return
@@ -968,6 +1000,8 @@ class MainWindow(QMainWindow):
             return
 
         self.sort_directory = chosen
+        self.config.output_dir = chosen
+        self._save_config()
         self.sort_check.setChecked(True)
         self._update_sort_label()
 
@@ -1164,7 +1198,7 @@ class MainWindow(QMainWindow):
         item.setForeground(QBrush(QColor(VERDICT_COLORS[result.verdict])))
 
 
-def main(rules_path: Path | None = None) -> int:
+def main(rules_path: Path | None = None, config_path: Path | None = None) -> int:
     # A windowed build has no console, so sys.stderr is None and the default
     # stream handler would fail on its first record. The GUI shows its own log
     # pane regardless, which is where these end up.
@@ -1174,7 +1208,7 @@ def main(rules_path: Path | None = None) -> int:
         logging.basicConfig(level=logging.INFO)
 
     application = QApplication.instance() or QApplication(sys.argv)
-    window = MainWindow(rules_path or resolve_rules_path())
+    window = MainWindow(rules_path or resolve_rules_path(), config_path)
     window.show()
     return application.exec()
 
