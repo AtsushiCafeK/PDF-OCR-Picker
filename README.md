@@ -208,6 +208,18 @@ poetry install
 
 ### 3.1 CLI（本番用・Power Automate から呼ぶもの）
 
+> **開発環境と配布版でコマンドが違います。** 以下の例は開発用に `poetry run pdf-sorter ...` と
+> 書いていますが、**配布した exe では `poetry run pdf-sorter` の部分を exe のフルパスに置き換える**だけです。
+>
+> ```bash
+> # 開発環境
+> poetry run pdf-sorter batch "C:\in" --move-to "C:\sorted" --out result.jsonl
+> # 配布版exe（同じ意味）
+> "C:\tools\pdf-sorter\pdf-sorter.exe" batch "C:\in" --move-to "C:\sorted" --out result.jsonl
+> ```
+>
+> `C:\tools\pdf-sorter\` は zip を展開した場所に合わせてください。以降の例はすべて同様に読み替えられます。
+
 **フォルダ単位で処理する `batch` を使ってください。**
 `classify` をファイルごとにループで呼ぶと、OCRモデルの読み込み（数秒）を毎回払うことになります。
 
@@ -289,6 +301,24 @@ GUIで一度設定すれば、次回のGUI起動時にもCLI（PA）でも同じ
 （`rules.yaml` はキーワード、`config.yaml` はフォルダ、と役割が分かれています）。
 
 ### 3.2 Power Automate との連携
+
+**PAD（Power Automate Desktop）への登録（exe）**
+
+「**アプリケーションの実行**」アクションで、exe本体と引数を別々の欄に入れます。
+
+| 欄 | 入れる値（例） |
+|---|---|
+| アプリケーションパス | `C:\tools\pdf-sorter\pdf-sorter.exe` |
+| コマンドライン引数 | `batch "C:\in" --move-to "C:\sorted" --out "C:\logs\result.jsonl"` |
+| 作業フォルダ | `C:\tools\pdf-sorter`（任意） |
+| ウィンドウスタイル | **非表示**（コンソールの点滅を消す） |
+| アプリケーション起動後 | **アプリケーションの完了を待機** |
+
+「詳細」を開くと**標準出力・標準エラー・終了コードを変数に格納**できます。
+標準出力（または`--out`のJSONL）を「JSONを解析」アクションに渡し、件数で通知・分岐します。
+
+exeの横に `config.yaml`（[3.1](#31-cli本番用power-automate-から呼ぶもの) 参照）を置けば、引数は
+`batch` だけに短縮できます。スペースを含むパスは必ず二重引用符で囲んでください。
 
 **終了コード**（JSONを解析せずに分岐できます）
 
