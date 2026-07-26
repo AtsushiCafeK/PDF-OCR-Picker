@@ -38,10 +38,13 @@ class TestRouting:
         directories = {routing.directory_for(verdict) for verdict in Verdict}
         assert len(directories) == len(Verdict)
 
-    def test_the_folders_needing_a_human_sort_to_the_top(self):
-        """An operator should see the review pile without going looking for it."""
-        assert DEFAULT_FOLDER_NAMES[Verdict.NEEDS_REVIEW].startswith("_")
-        assert DEFAULT_FOLDER_NAMES[Verdict.OTHER].startswith("_")
+    def test_the_folder_names_match_the_displayed_labels(self):
+        """One vocabulary everywhere: the folder a document lands in is named the
+        same word the GUI and the progress window used to describe it."""
+        from pdf_ocr.core.types import VERDICT_LABELS
+
+        assert DEFAULT_FOLDER_NAMES == VERDICT_LABELS
+        assert DEFAULT_FOLDER_NAMES[Verdict.INVOICE] == "Match"
 
     def test_folder_names_can_be_overridden(self, tmp_path):
         routing = Routing(tmp_path, names=dict.fromkeys(Verdict, "flat"))

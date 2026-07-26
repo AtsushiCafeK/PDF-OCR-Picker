@@ -18,17 +18,15 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pdf_ocr.core.types import ScoreResult, Verdict
+from pdf_ocr.core.types import VERDICT_LABELS, ScoreResult, Verdict
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_FOLDER_NAMES: dict[Verdict, str] = {
-    Verdict.INVOICE: "請求書",
-    Verdict.NEEDS_REVIEW: "_要確認",
-    Verdict.OTHER: "_その他",
-}
-"""The two folders beginning with an underscore sort to the top of an Explorer
-window, which is where the documents needing a human belong."""
+DEFAULT_FOLDER_NAMES: dict[Verdict, str] = dict(VERDICT_LABELS)
+"""Destination folder per verdict. Identical to the labels shown in the GUI and
+the progress window, so a document filed under "Match" is the same word the
+window used to describe it -- one vocabulary across the result, the folders and
+the progress display."""
 
 MAX_COLLISION_ATTEMPTS = 1000
 

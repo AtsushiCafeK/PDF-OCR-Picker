@@ -210,24 +210,68 @@ def command_batch(arguments: argparse.Namespace) -> int:
     out = arguments.out or config.log
 
     engine = build_engine(arguments)
-    routing = Routing(move_to) if move_to else None
-
     paths = sorted(directory.rglob("*.pdf") if arguments.recursive
                    else directory.glob("*.pdf"))
     if not paths:
         logger.warning("no PDFs found in %s", directory)
 
+    if getattr(arguments, "progress", False):
+        # Imported lazily: only a --progress run needs Qt, and the headless path
+        # (the one Power Automate uses) must still work where PySide6 is absent.
+        from pdf_ocr.progress import run_batch_with_progress
+
+        summary = run_batch_with_progress(
+            paths, engine, rules, arguments, directory=directory, move_to=move_to, out=out
+        )
+    else:
+        summary = run_batch(
+            paths, engine, rules, arguments, directory=directory, move_to=move_to, out=out
+        )
+
+    emit(summary)
+    return ExitCode.ERROR if summary["errors"] else ExitCode.INVOICE
+
+
+def run_batch(
+    paths: list[Path],
+    engine: EasyOcrEngine | None,
+    rules: RuleSet,
+    arguments: argparse.Namespace,
+    *,
+    directory: Path,
+    move_to: Path | None,
+    out: Path | None,
+    on_file=None,
+    should_stop=None,
+) -> dict:
+    """Classify every path, filing and logging as it goes, and return a summary.
+
+    Factored out of the command so both the headless run and the progress-window
+    run share exactly one classification loop -- the window is only a view onto
+    this. ``on_file(processed, total, counts)`` is called after each document so
+    a caller can show progress; ``should_stop()`` is polled before each so a
+    caller can cancel, and a document already being read still finishes.
+    """
+    routing = Routing(move_to) if move_to else None
     counts: Counter[str] = Counter()
     started = time.perf_counter()
+    processed = 0
+    stopped = False
 
     with AuditLog(out) as audit:
         for path in paths:
+            if should_stop is not None and should_stop():
+                stopped = True
+                break
             try:
                 result, elapsed = classify_one(path, engine, rules, arguments)
             except ExtractionError as error:
                 counts["error"] += 1
                 logger.error("%s", error)
                 audit.record(path, None, error=str(error), dry_run=arguments.dry_run)
+                processed += 1
+                if on_file is not None:
+                    on_file(processed, len(paths), counts)
                 continue
 
             destination = None
@@ -249,23 +293,24 @@ def command_batch(arguments: argparse.Namespace) -> int:
                 "%s -> %s (%.0f) in %.1fs", path.name, result.verdict.value,
                 result.score, elapsed,
             )
+            processed += 1
+            if on_file is not None:
+                on_file(processed, len(paths), counts)
 
-    summary = {
+    return {
         "directory": str(directory),
         "files": len(paths),
+        "processed": processed,
+        "stopped": stopped,
         "elapsed": round(time.perf_counter() - started, 2),
         "dry_run": arguments.dry_run,
-        "verdicts": {
-            verdict.value: counts[verdict.value] for verdict in Verdict
-        },
+        "verdicts": {verdict.value: counts[verdict.value] for verdict in Verdict},
         "errors": counts["error"],
         "read_from": {
             source.value: counts[f"read:{source.value}"] for source in Source
         },
         "log": str(out) if out else None,
     }
-    emit(summary)
-    return ExitCode.ERROR if counts["error"] else ExitCode.INVOICE
 
 
 def command_gui(arguments: argparse.Namespace) -> int:
@@ -448,6 +493,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     batch.add_argument("--out", type=Path, help="write one JSONL record per file here")
     batch.add_argument("--recursive", action="store_true")
+    batch.add_argument(
+        "--progress",
+        action="store_true",
+        help="show a window with live progress (n/total and the running tally)",
+    )
     add_move_arguments(batch)
     add_shared_arguments(batch)
     batch.set_defaults(function=command_batch)

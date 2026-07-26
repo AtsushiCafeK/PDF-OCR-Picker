@@ -70,7 +70,7 @@ from pdf_ocr.core.mover import (
 from pdf_ocr.core.normalize import NormalizedText, NormalizeOptions, normalize_blocks
 from pdf_ocr.core.ocr.easy import EasyOcrEngine
 from pdf_ocr.core.score import RuleError, RuleSet, Thresholds, score_page
-from pdf_ocr.core.types import Page, ScoreResult, Source, Verdict
+from pdf_ocr.core.types import VERDICT_LABELS, Page, ScoreResult, Source, Verdict
 
 logger = logging.getLogger(__name__)
 
@@ -82,19 +82,6 @@ VERDICT_COLORS = {
     Verdict.INVOICE: "#1f7a3d",
     Verdict.NEEDS_REVIEW: "#a8710a",
     Verdict.OTHER: "#8a2b2b",
-}
-
-# Shown in place of the internal verdict names. The engine calls a hit "invoice"
-# because that is what it was built for, but it only ever tests whether the
-# keywords are present -- so with a different rules.yaml the same machinery sorts
-# receipts or quotations just as well. The window says "Match" rather than
-# "invoice" so that someone tuning it for another document type is not told their
-# receipts are invoices. ("Match", not "Success": the other two outcomes are
-# valid results, not failures -- a receipt landing in Other is a correct reject.)
-VERDICT_LABELS = {
-    Verdict.INVOICE: "Match",
-    Verdict.NEEDS_REVIEW: "Review",
-    Verdict.OTHER: "Other",
 }
 
 BOX_NEUTRAL = QColor(90, 140, 210, 110)
@@ -372,10 +359,11 @@ class MainWindow(QMainWindow):
         sort_layout = QVBoxLayout(sort_box)
         self.sort_check = QCheckBox("Copy into verdict folders while classifying")
         self.sort_check.setToolTip(
-            "During 'Classify all', copy each document into 請求書 / _要確認 / "
-            "_その他 under the chosen folder, so a large batch can be reviewed "
-            "the way it will actually look. Copies, never moves -- the source "
-            "folder is left untouched."
+            "During 'Classify all', copy each document into "
+            + " / ".join(DEFAULT_FOLDER_NAMES.values())
+            + " under the chosen folder, so a large batch can be reviewed the "
+            "way it will actually look. Copies, never moves -- the source folder "
+            "is left untouched."
         )
         self.sort_check.stateChanged.connect(lambda _state: self._update_sort_label())
         sort_layout.addWidget(self.sort_check)

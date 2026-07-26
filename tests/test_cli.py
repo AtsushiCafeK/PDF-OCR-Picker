@@ -269,6 +269,77 @@ class TestGuiSubcommand:
         assert launched_as_gui() is False
 
 
+class TestRunBatch:
+    """The loop both the headless run and the progress window share."""
+
+    def _args(self, dry_run=False):
+        from argparse import Namespace
+
+        from pdf_ocr.core.extract import DEFAULT_DPI, MIN_TEXT_LAYER_CHARS
+
+        return Namespace(
+            dpi=DEFAULT_DPI,
+            min_text_chars=MIN_TEXT_LAYER_CHARS,
+            force_ocr=False,
+            dry_run=dry_run,
+        )
+
+    def _rules(self):
+        from pdf_ocr import DEFAULT_RULES_PATH
+        from pdf_ocr.core.score import RuleSet
+
+        return RuleSet.load(DEFAULT_RULES_PATH)
+
+    def test_on_file_is_called_once_per_document(self, tmp_path):
+        from pdf_ocr.cli import run_batch
+
+        inbox = tmp_path / "in"
+        sample_pdf(inbox, "invoice_01_centered")
+        sample_pdf(inbox, "other_01_quotation")
+        paths = sorted(inbox.glob("*.pdf"))
+        seen = []
+        summary = run_batch(
+            paths, None, self._rules(), self._args(),
+            directory=inbox, move_to=None, out=None,
+            on_file=lambda done, total, counts: seen.append((done, total)),
+        )
+        assert seen == [(1, 2), (2, 2)]
+        assert summary["processed"] == 2
+        assert summary["stopped"] is False
+
+    def test_the_tally_grows_as_it_goes(self, tmp_path):
+        from pdf_ocr.cli import run_batch
+
+        inbox = tmp_path / "in"
+        sample_pdf(inbox, "invoice_01_centered")
+        paths = sorted(inbox.glob("*.pdf"))
+        snapshots = []
+        run_batch(
+            paths, None, self._rules(), self._args(),
+            directory=inbox, move_to=None, out=None,
+            on_file=lambda done, total, counts: snapshots.append(dict(counts)),
+        )
+        assert snapshots[-1]["invoice"] == 1
+
+    def test_should_stop_halts_before_the_next_file(self, tmp_path):
+        """A document already being read still finishes; nothing after starts."""
+        from pdf_ocr.cli import run_batch
+
+        inbox = tmp_path / "in"
+        for name in ("invoice_01_centered", "other_01_quotation", "invoice_09_korean"):
+            sample_pdf(inbox, name)
+        paths = sorted(inbox.glob("*.pdf"))
+        done_count = {"n": 0}
+        summary = run_batch(
+            paths, None, self._rules(), self._args(),
+            directory=inbox, move_to=None, out=None,
+            on_file=lambda done, total, counts: done_count.__setitem__("n", done),
+            should_stop=lambda: done_count["n"] >= 1,
+        )
+        assert summary["processed"] == 1
+        assert summary["stopped"] is True
+
+
 class TestConfigDefaults:
     """A configured folder lets a Power Automate step be just
     'pdf-sorter.exe batch', with the folders already known."""

@@ -77,6 +77,64 @@ def window(_shared_window):
     return w
 
 
+class TestProgressWindow:
+    """The window that makes a headless batch visible: n/total and the tally."""
+
+    def _window(self, application, total):
+        from pdf_ocr.progress import ProgressWindow
+
+        return ProgressWindow(total)
+
+    def test_it_shows_the_running_tally(self, application):
+        w = self._window(application, 32)
+        try:
+            w.update_progress(5, 32, {"invoice": 3, "needs_review": 1, "other": 1})
+            assert w.count_label.text() == "5/32"
+            assert w.verdict_labels[Verdict.INVOICE].text() == "Match - 3"
+            assert w.verdict_labels[Verdict.NEEDS_REVIEW].text() == "Review - 1"
+            assert w.verdict_labels[Verdict.OTHER].text() == "Other - 1"
+        finally:
+            w._done = True
+            w.close()
+            w.deleteLater()
+
+    def test_done_shows_completion(self, application):
+        w = self._window(application, 2)
+        try:
+            w.mark_done({"processed": 2, "stopped": False, "verdicts": {"invoice": 2}})
+            assert w.status_label.text() == "完了"
+            assert w.count_label.text() == "2/2"
+            assert w.verdict_labels[Verdict.INVOICE].text() == "Match - 2"
+        finally:
+            w.close()
+            w.deleteLater()
+
+    def test_a_stopped_run_says_so(self, application):
+        w = self._window(application, 5)
+        try:
+            w.mark_done({"processed": 2, "stopped": True, "verdicts": {}})
+            assert "停止" in w.status_label.text()
+        finally:
+            w.close()
+            w.deleteLater()
+
+    def test_closing_mid_run_requests_stop_and_stays_open(self, application):
+        from PySide6.QtGui import QCloseEvent
+
+        w = self._window(application, 5)
+        try:
+            requested = []
+            w.stop_requested.connect(lambda: requested.append(True))
+            event = QCloseEvent()
+            w.closeEvent(event)  # not done yet
+            assert requested == [True]
+            assert not event.isAccepted()  # window stays until the worker returns
+        finally:
+            w._done = True
+            w.close()
+            w.deleteLater()
+
+
 class TestNeutralLabels:
     """The window names the top outcome for what it is -- a match -- not
     'invoice', so someone tuning the rules for receipts or quotations is not

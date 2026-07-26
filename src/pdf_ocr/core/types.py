@@ -50,6 +50,22 @@ class Verdict(StrEnum):
     OTHER = "other"
 
 
+VERDICT_LABELS: dict[Verdict, str] = {
+    Verdict.INVOICE: "Match",
+    Verdict.NEEDS_REVIEW: "Review",
+    Verdict.OTHER: "Other",
+}
+"""The single source of truth for how a verdict is named to a person.
+
+The enum values (``invoice`` etc.) are internal and appear in the machine-facing
+JSON. These labels are what a human sees -- in the GUI's result, in the progress
+window, and as the destination folder names -- so all three read the same and a
+run tuned for another document type is never labelled "invoice". Defined here,
+in the one module both the core and the front ends already import, so the three
+places cannot drift apart.
+"""
+
+
 @dataclass(frozen=True)
 class TextBlock:
     """A run of text with a position on the page."""
