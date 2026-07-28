@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +48,37 @@ def largest(path: Path, count: int = 12) -> list[tuple[str, int]]:
     return sorted(sizes.items(), key=lambda pair: pair[1], reverse=True)[:count]
 
 
+def strip_local_config(folder: Path) -> None:
+    """Remove any config.yaml left in the bundle before it is shipped.
+
+    config.yaml holds one machine's folder paths and is written beside the exe
+    the moment someone picks folders in the GUI. It must never travel in a
+    release -- it would leak local paths and point a stranger's copy at folders
+    that do not exist -- so it is stripped here, right before packaging.
+    """
+    stray = folder / "config.yaml"
+    if stray.exists():
+        stray.unlink()
+        print(f"removed {stray.name} (machine-local; never shipped)")
+
+
+def make_zip(folder: Path, out_zip: Path) -> Path:
+    """Zip the bundle for a release, extracting to a folder of the same name."""
+    if out_zip.exists():
+        out_zip.unlink()
+    base = folder.name
+    with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+        for item in sorted(folder.rglob("*")):
+            if item.is_file():
+                arcname = f"{base}/{item.relative_to(folder).as_posix()}"
+                archive.write(item, arcname)
+    # A release must not carry a machine's config; fail loudly rather than ship
+    # one by accident.
+    with zipfile.ZipFile(out_zip) as archive:
+        assert f"{base}/config.yaml" not in archive.namelist(), "config.yaml leaked into the zip"
+    return out_zip
+
+
 def ensure_models() -> None:
     if MODELS.is_dir() and any(MODELS.glob("*.pth")):
         return
@@ -75,6 +107,12 @@ def main() -> None:
         help="build without bundling the models, to measure the code alone",
     )
     parser.add_argument("--clean", action="store_true", help="discard cached analysis")
+    parser.add_argument(
+        "--zip",
+        action="store_true",
+        help="package the bundle into a release zip (onedir only), with any "
+        "machine-local config.yaml stripped out",
+    )
     arguments = parser.parse_args()
 
     if not arguments.skip_models:
@@ -99,6 +137,10 @@ def main() -> None:
     if not arguments.skip_models:
         shutil.copytree(MODELS, beside / "models", dirs_exist_ok=True)
 
+    # A previous run from this folder may have written a config.yaml; never let
+    # it reach the size report or the zip.
+    strip_local_config(beside)
+
     total = directory_size(beside)
     print(f"\n{beside}")
     print(f"  code and dependencies  {megabytes(code_size)}")
@@ -107,6 +149,17 @@ def main() -> None:
     print("\nlargest components:")
     for name, size in largest(beside):
         print(f"  {megabytes(size):>10}  {name}")
+
+    if arguments.zip:
+        if arguments.onefile:
+            print("\n--zip packages the onedir bundle; nothing to zip for --onefile")
+            return
+        from pdf_ocr import __version__
+
+        out_zip = DIST_ROOT / f"pdf-sorter-v{__version__}-win64.zip"
+        make_zip(beside, out_zip)
+        print(f"\nzip: {out_zip}")
+        print(f"  {megabytes(out_zip.stat().st_size)}  (config.yaml verified absent)")
 
 
 if __name__ == "__main__":
