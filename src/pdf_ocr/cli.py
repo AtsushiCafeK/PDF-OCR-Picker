@@ -210,8 +210,8 @@ def command_batch(arguments: argparse.Namespace) -> int:
     out = arguments.out or config.log
 
     engine = build_engine(arguments)
-    paths = sorted(directory.rglob("*.pdf") if arguments.recursive
-                   else directory.glob("*.pdf"))
+    recursive = arguments.recursive or config.recursive
+    paths = sorted(directory.rglob("*.pdf") if recursive else directory.glob("*.pdf"))
     if not paths:
         logger.warning("no PDFs found in %s", directory)
 
@@ -344,8 +344,8 @@ def command_diag(arguments: argparse.Namespace) -> int:
         return ExitCode.ERROR
     engine = build_engine(arguments)
 
-    paths = sorted(directory.rglob("*.pdf") if arguments.recursive
-                   else directory.glob("*.pdf"))
+    recursive = arguments.recursive or config.recursive
+    paths = sorted(directory.rglob("*.pdf") if recursive else directory.glob("*.pdf"))
 
     rows: list[dict] = []
     for path in paths:
@@ -492,7 +492,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="folder to classify (default: input_dir from config.yaml)",
     )
     batch.add_argument("--out", type=Path, help="write one JSONL record per file here")
-    batch.add_argument("--recursive", action="store_true")
+    batch.add_argument(
+        "--recursive",
+        action="store_true",
+        help="include subfolders (also enabled by 'recursive: true' in config.yaml)",
+    )
     batch.add_argument(
         "--progress",
         action="store_true",

@@ -36,6 +36,9 @@ class Config:
     log: Path | None = None
     """Where to append the JSONL audit log (the CLI's --out)."""
 
+    recursive: bool = False
+    """Whether to include documents in subfolders of the input folder."""
+
     path: Path | None = None
     """Where this was loaded from and will be saved to. Not written into the
     file itself."""
@@ -55,7 +58,7 @@ class Config:
         values = {
             field: (Path(data[field]) if data.get(field) else None) for field in _FIELDS
         }
-        return cls(path=path, **values)
+        return cls(path=path, recursive=bool(data.get("recursive", False)), **values)
 
     def save(self) -> None:
         """Write the set fields back, so a folder chosen once is remembered.
@@ -66,11 +69,13 @@ class Config:
         """
         if self.path is None:
             raise ValueError("Config has no path to save to")
-        data = {
+        data: dict = {
             field: str(value)
             for field in _FIELDS
             if (value := getattr(self, field)) is not None
         }
+        if self.recursive:
+            data["recursive"] = True
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
             yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8"

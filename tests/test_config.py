@@ -61,3 +61,19 @@ class TestSaving:
         Config(path=path, input_dir=Path("C:\\old")).save()
         Config(path=path, input_dir=Path("C:\\new")).save()
         assert Config.load(path).input_dir == Path("C:\\new")
+
+
+class TestRecursive:
+    def test_default_is_false(self, tmp_path):
+        assert Config.load(tmp_path / "none.yaml").recursive is False
+
+    def test_it_round_trips(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        Config(path=path, recursive=True).save()
+        assert Config.load(path).recursive is True
+
+    def test_false_is_not_written(self, tmp_path):
+        """Only set fields are written; the default stays implicit."""
+        path = tmp_path / "config.yaml"
+        Config(path=path, recursive=False, input_dir=Path("C:\\in")).save()
+        assert "recursive" not in path.read_text(encoding="utf-8")

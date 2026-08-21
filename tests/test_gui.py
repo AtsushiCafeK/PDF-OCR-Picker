@@ -61,6 +61,9 @@ def window(_shared_window):
     w.config = Config(path=w.config.path)
     if w.config.path.exists():
         w.config.path.unlink()
+    w.recurse_check.blockSignals(True)
+    w.recurse_check.setChecked(False)
+    w.recurse_check.blockSignals(False)
     w._close_debug_log()
     w._batch_running = False
     w._pending_batch = []
@@ -480,6 +483,36 @@ class TestRemembersFolders:
         )
         window._open_folder()
         assert window.config.input_dir == inbox
+
+    def test_subfolders_are_included_only_when_asked(self, window, tmp_path, monkeypatch):
+        inbox = tmp_path / "in"
+        (inbox / "sub").mkdir(parents=True)
+        (inbox / "top.pdf").write_bytes(b"pdf")
+        (inbox / "sub" / "deep.pdf").write_bytes(b"pdf")
+        monkeypatch.setattr(
+            "pdf_ocr.gui.QFileDialog.getExistingDirectory",
+            lambda *a, **k: str(inbox),
+        )
+
+        window.recurse_check.setChecked(False)
+        window._open_folder()
+        assert window.file_list.count() == 1  # top only
+
+        window.recurse_check.setChecked(True)  # re-lists the folder
+        assert window.file_list.count() == 2
+        # The subfolder file is shown by its path, not a bare name.
+        texts = {window.file_list.item(i).text() for i in range(window.file_list.count())}
+        assert "sub/deep.pdf" in texts
+
+    def test_the_recurse_choice_is_remembered(self, window, tmp_path, monkeypatch):
+        from pdf_ocr.core.config import Config
+
+        monkeypatch.setattr(
+            "pdf_ocr.gui.QFileDialog.getExistingDirectory",
+            lambda *a, **k: str(tmp_path),
+        )
+        window.recurse_check.setChecked(True)
+        assert Config.load(window.config.path).recursive is True
 
     def test_a_configured_input_folder_is_listed_at_startup(self, tmp_path):
         """Listed, not classified: selecting a row would start OCR, which a

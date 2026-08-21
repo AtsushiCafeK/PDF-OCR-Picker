@@ -383,6 +383,22 @@ class TestConfigDefaults:
         assert code == ExitCode.ERROR
         assert "error" in stdout_json(capsys)
 
+    def test_config_recursive_includes_subfolders(self, tmp_path, capsys):
+        inbox = tmp_path / "in"
+        sample_pdf(inbox, "invoice_01_centered")
+        sample_pdf(inbox / "sub", "other_01_quotation")
+        config = self._config(tmp_path, input_dir=inbox, recursive="true")
+        main(["batch", "--no-ocr", "--config", str(config)])
+        assert stdout_json(capsys)["files"] == 2  # top + subfolder
+
+    def test_without_recursive_subfolders_are_skipped(self, tmp_path, capsys):
+        inbox = tmp_path / "in"
+        sample_pdf(inbox, "invoice_01_centered")
+        sample_pdf(inbox / "sub", "other_01_quotation")
+        config = self._config(tmp_path, input_dir=inbox)
+        main(["batch", "--no-ocr", "--config", str(config)])
+        assert stdout_json(capsys)["files"] == 1  # top only
+
     def test_the_configured_log_is_written(self, tmp_path):
         inbox = tmp_path / "in"
         sample_pdf(inbox, "invoice_01_centered")

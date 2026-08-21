@@ -274,7 +274,7 @@ poetry run pdf-sorter batch "C:\in" --move-to "C:\sorted" --progress
 | `--rules <file>` | ルールファイルを差し替える |
 | `--force-ocr` | テキスト層があっても無視してOCRする |
 | `--no-ocr` | OCRを行わない（テキスト層のみ、高速） |
-| `--recursive` | サブフォルダも対象にする |
+| `--recursive` | サブフォルダも対象にする（config.yaml の `recursive: true` でも有効化） |
 | `--dpi <n>` | OCR時のラスタライズ解像度（既定300） |
 | `--config <file>` | 既定フォルダの config.yaml を差し替える |
 | `-v` | 進捗を stderr に出す |
@@ -289,6 +289,7 @@ poetry run pdf-sorter batch "C:\in" --move-to "C:\sorted" --progress
 input_dir: C:\in
 output_dir: C:\sorted
 log: C:\logs\result.jsonl
+recursive: true    # サブフォルダも対象にする（任意。既定はfalse）
 ```
 
 ```bash
@@ -389,6 +390,8 @@ OCRは1文書につき1回だけ実行され、結果は保持されます。
 常に起動時の既定ルールに戻るので、試したチューニングは簡単に捨てられます。
 参照フォルダ・コピー先は選ぶと `config.yaml` に記憶され、次回のGUIでもCLIでも既定になります
 （[3.1](#31-cli本番用power-automate-から呼ぶもの) のフォルダ事前指定を参照）。
+ファイル一覧の下の **`Include subfolders`** をONにすると、サブフォルダ内のPDFも一覧に含まれます
+（相対パスで表示）。この設定も `config.yaml`（`recursive: true`）に記憶され、CLIの `batch`/`diag` にも反映されます。
 
 Rulesタブで編集した内容は `Save as...` で保存します。
 `Save`（上書き）にしていないのは、`rules.yaml` に各重みの根拠がコメントで書かれており、

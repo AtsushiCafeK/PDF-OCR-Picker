@@ -17,6 +17,7 @@ Run it with::
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 import time
@@ -311,7 +312,11 @@ class MainWindow(QMainWindow):
             # List the remembered folder, but do not auto-select -- selecting a
             # row would start OCR on it, and a person opening the window has not
             # asked for that yet.
-            self._populate(sorted(self.config.input_dir.glob("*.pdf")), select_first=False)
+            self._populate(
+                self._list_pdfs(self.config.input_dir),
+                select_first=False,
+                root=self.config.input_dir,
+            )
             self.statusBar().showMessage(
                 f"{self.file_list.count()} document(s) from {self.config.input_dir}"
             )
@@ -328,6 +333,16 @@ class MainWindow(QMainWindow):
         self.file_list.currentItemChanged.connect(self._on_file_selected)
         layout.addWidget(QLabel("Documents"))
         layout.addWidget(self.file_list, 1)
+
+        self.recurse_check = QCheckBox("Include subfolders")
+        self.recurse_check.setToolTip(
+            "List PDFs in subfolders of the opened folder too, not just the top "
+            "level. Remembered in config.yaml, so the command line's batch/diag "
+            "recurse as well when this is on."
+        )
+        self.recurse_check.setChecked(self.config.recursive)
+        self.recurse_check.stateChanged.connect(lambda _state: self._on_recurse_toggled())
+        layout.addWidget(self.recurse_check)
 
         run_row = QHBoxLayout()
         self.classify_all_button = QPushButton("Classify all")
@@ -577,8 +592,26 @@ class MainWindow(QMainWindow):
         start = str(self.config.input_dir) if self.config.input_dir else ""
         directory = QFileDialog.getExistingDirectory(self, "Open folder", start)
         if directory:
-            self._remember_input_dir(Path(directory))
-            self._populate(sorted(Path(directory).glob("*.pdf")))
+            chosen = Path(directory)
+            self._remember_input_dir(chosen)
+            self._populate(self._list_pdfs(chosen), root=chosen)
+
+    def _list_pdfs(self, directory: Path) -> list[Path]:
+        """PDFs in the folder -- and its subfolders when 'Include subfolders' is
+        on. The same choice the command line reads from config.recursive."""
+        pattern = "**/*.pdf" if self.recurse_check.isChecked() else "*.pdf"
+        return sorted(directory.glob(pattern))
+
+    def _on_recurse_toggled(self) -> None:
+        self.config.recursive = self.recurse_check.isChecked()
+        self._save_config()
+        # Re-list the folder in view under the new setting.
+        if self.config.input_dir and self.config.input_dir.is_dir():
+            self._populate(
+                self._list_pdfs(self.config.input_dir),
+                select_first=False,
+                root=self.config.input_dir,
+            )
 
     def _remember_input_dir(self, directory: Path) -> None:
         """Persist the chosen input folder, so it is the default next time."""
@@ -593,10 +626,18 @@ class MainWindow(QMainWindow):
             # not interrupt the work in front of the user.
             logger.warning("could not save config: %s", error)
 
-    def _populate(self, paths: list[Path], select_first: bool = True) -> None:
+    def _populate(
+        self, paths: list[Path], select_first: bool = True, root: Path | None = None
+    ) -> None:
         self.file_list.clear()
         for path in paths:
-            item = QListWidgetItem(path.name)
+            # Show the path relative to the opened folder, so a document in a
+            # subfolder is told apart from a same-named one elsewhere.
+            text = path.name
+            if root is not None:
+                with contextlib.suppress(ValueError):
+                    text = path.relative_to(root).as_posix()
+            item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, path)
             self.file_list.addItem(item)
         if paths and select_first:
