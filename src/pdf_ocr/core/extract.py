@@ -145,9 +145,27 @@ def extract_first_page(
 ) -> Page:
     """Extract the first page of a PDF.
 
-    Only the first page, because that is where a document says what it is. On a
-    scanned document every extra page costs seconds of OCR to tell us something
-    the title already did.
+    Only the first page, because that is usually where a document says what it
+    is. See :func:`extract_pages` for reading further in.
+    """
+    return extract_pages(path, engine, dpi, min_chars, force_ocr, max_pages=1)[0]
+
+
+def extract_pages(
+    path: str | Path,
+    engine: OcrEngine | None = None,
+    dpi: int = DEFAULT_DPI,
+    min_chars: int = MIN_TEXT_LAYER_CHARS,
+    force_ocr: bool = False,
+    max_pages: int = 1,
+) -> list[Page]:
+    """Extract the first ``max_pages`` pages (``max_pages <= 0`` means all).
+
+    One page is the default because that is where a document usually names
+    itself, and every extra page of a scan costs seconds of OCR. Reading further
+    is for the cases that break that assumption -- a scan whose first page is a
+    cover sheet or delivery slip and whose invoice is further in. The caller
+    scores each page and keeps the best, so a title on page two still counts.
     """
     path = Path(path)
     try:
@@ -160,4 +178,8 @@ def extract_first_page(
             raise ExtractionError(f"{path}: is password protected")
         if document.page_count == 0:
             raise ExtractionError(f"{path}: has no pages")
-        return extract_page(document[0], engine, dpi, min_chars, force_ocr)
+        count = document.page_count if max_pages <= 0 else min(max_pages, document.page_count)
+        return [
+            extract_page(document[index], engine, dpi, min_chars, force_ocr)
+            for index in range(count)
+        ]

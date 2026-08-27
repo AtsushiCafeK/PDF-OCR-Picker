@@ -110,6 +110,7 @@ def run_batch_with_progress(
     directory: Path,
     move_to: Path | None,
     out: Path | None,
+    max_pages: int = 1,
 ) -> dict:
     """Run a batch behind a progress window, returning the same summary as the
     headless path once the window is closed."""
@@ -118,7 +119,7 @@ def run_batch_with_progress(
     def run(on_file, should_stop):
         return run_batch(
             paths, engine, rules, arguments,
-            directory=directory, move_to=move_to, out=out,
+            directory=directory, move_to=move_to, out=out, max_pages=max_pages,
             on_file=on_file, should_stop=should_stop,
         )
 

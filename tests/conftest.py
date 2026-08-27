@@ -13,6 +13,20 @@ from pdf_ocr import DEFAULT_RULES_PATH
 from pdf_ocr.core.score import RuleSet
 from pdf_ocr.core.types import Page, Source, TextBlock
 
+
+@pytest.fixture(autouse=True)
+def _isolate_config(tmp_path_factory, monkeypatch):
+    """Point the default config path at an empty throwaway for every test.
+
+    Without this, a command run without --config reads the real config.yaml
+    beside the package -- a developer's machine-local file with their own
+    folders -- and a test would suddenly move files or read a different folder
+    depending on whose machine it ran on. Tests that want a config pass one
+    explicitly with --config; everything else sees an empty one.
+    """
+    empty = tmp_path_factory.mktemp("cfg") / "config.yaml"
+    monkeypatch.setattr("pdf_ocr.DEFAULT_CONFIG_PATH", empty)
+
 PAGE_WIDTH = 595.0
 PAGE_HEIGHT = 800.0
 """Chosen so the top-quarter cutoff lands on a round 200.0."""

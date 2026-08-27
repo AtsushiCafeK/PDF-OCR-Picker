@@ -28,7 +28,7 @@ from pdf_ocr.core.extract import (
     DEFAULT_DPI,
     MIN_TEXT_LAYER_CHARS,
     ExtractionError,
-    extract_first_page,
+    extract_pages,
 )
 from pdf_ocr.core.mover import DEFAULT_FOLDER_NAMES, AuditLog, Routing, move_file
 from pdf_ocr.core.ocr.easy import EasyOcrEngine
@@ -109,18 +109,27 @@ def owns_console() -> bool:
 
 
 GUI_EXECUTABLE_MARKER = "gui"
+PRINT_EXECUTABLE_MARKER = "print"
+
+
+def _frozen_exe_stem() -> str:
+    return Path(sys.executable).stem.lower() if getattr(sys, "frozen", False) else ""
 
 
 def launched_as_gui() -> bool:
-    """Whether this process is the windowed build.
+    """Whether this process is the tuning-GUI executable.
 
-    Both builds run this same module -- one bundle rather than two, because a
-    second one would duplicate PyTorch and the OCR models. They are told apart
-    by the name of the executable, which is set in the spec file.
+    The executables share one bundle -- a second would duplicate PyTorch and the
+    OCR models -- and are told apart by the name they were launched under, set
+    in the spec file.
     """
-    if not getattr(sys, "frozen", False):
-        return False
-    return GUI_EXECUTABLE_MARKER in Path(sys.executable).stem.lower()
+    stem = _frozen_exe_stem()
+    return GUI_EXECUTABLE_MARKER in stem and PRINT_EXECUTABLE_MARKER not in stem
+
+
+def launched_as_print() -> bool:
+    """Whether this process is the standalone print executable (pdf-print.exe)."""
+    return PRINT_EXECUTABLE_MARKER in _frozen_exe_stem()
 
 
 def load_config(arguments: argparse.Namespace) -> Config:
@@ -143,17 +152,31 @@ def build_engine(arguments: argparse.Namespace) -> EasyOcrEngine | None:
     )
 
 
-def classify_one(path: Path, engine, rules: RuleSet, arguments: argparse.Namespace):
-    """Extract and score one file. Returns ``(result, elapsed)``."""
+def pages_to_read(arguments: argparse.Namespace, config: Config) -> int:
+    """How many pages to read: the explicit --pages wins over config.pages."""
+    return arguments.pages if arguments.pages is not None else config.pages
+
+
+def classify_one(
+    path: Path, engine, rules: RuleSet, arguments: argparse.Namespace, max_pages: int = 1
+):
+    """Extract and score one file. Returns ``(result, elapsed)``.
+
+    When ``max_pages`` allows more than one page, each page is scored and the
+    highest-scoring one decides -- so an invoice on page two of a scan whose
+    first page is a cover sheet is still found. Almost every file is one page,
+    where this is exactly the old behaviour.
+    """
     started = time.perf_counter()
-    page = extract_first_page(
+    pages = extract_pages(
         path,
         engine,
         dpi=arguments.dpi,
         min_chars=arguments.min_text_chars,
         force_ocr=arguments.force_ocr,
+        max_pages=max_pages,
     )
-    result = score_page(page, rules)
+    result = max((score_page(page, rules) for page in pages), key=lambda r: r.score)
     return result, time.perf_counter() - started
 
 
@@ -168,10 +191,11 @@ def command_classify(arguments: argparse.Namespace) -> int:
     config = load_config(arguments)
     move_to = arguments.move_to or config.output_dir
     log = arguments.log or config.log
+    max_pages = pages_to_read(arguments, config)
     engine = build_engine(arguments)
 
     try:
-        result, elapsed = classify_one(arguments.path, engine, rules, arguments)
+        result, elapsed = classify_one(arguments.path, engine, rules, arguments, max_pages)
     except ExtractionError as error:
         emit({"source": str(arguments.path), "error": str(error)})
         logger.error("%s", error)
@@ -208,6 +232,7 @@ def command_batch(arguments: argparse.Namespace) -> int:
         return ExitCode.ERROR
     move_to = arguments.move_to or config.output_dir
     out = arguments.out or config.log
+    max_pages = pages_to_read(arguments, config)
 
     engine = build_engine(arguments)
     recursive = arguments.recursive or config.recursive
@@ -221,11 +246,13 @@ def command_batch(arguments: argparse.Namespace) -> int:
         from pdf_ocr.progress import run_batch_with_progress
 
         summary = run_batch_with_progress(
-            paths, engine, rules, arguments, directory=directory, move_to=move_to, out=out
+            paths, engine, rules, arguments,
+            directory=directory, move_to=move_to, out=out, max_pages=max_pages,
         )
     else:
         summary = run_batch(
-            paths, engine, rules, arguments, directory=directory, move_to=move_to, out=out
+            paths, engine, rules, arguments,
+            directory=directory, move_to=move_to, out=out, max_pages=max_pages,
         )
 
     emit(summary)
@@ -241,6 +268,7 @@ def run_batch(
     directory: Path,
     move_to: Path | None,
     out: Path | None,
+    max_pages: int = 1,
     on_file=None,
     should_stop=None,
 ) -> dict:
@@ -264,7 +292,7 @@ def run_batch(
                 stopped = True
                 break
             try:
-                result, elapsed = classify_one(path, engine, rules, arguments)
+                result, elapsed = classify_one(path, engine, rules, arguments, max_pages)
             except ExtractionError as error:
                 counts["error"] += 1
                 logger.error("%s", error)
@@ -328,6 +356,18 @@ def command_gui(arguments: argparse.Namespace) -> int:
     return gui_main(arguments.rules, arguments.config)
 
 
+def command_print(arguments: argparse.Namespace) -> int:
+    """Open the standalone print window.
+
+    Unrelated to the classifier -- no rules, no OCR -- but it lives in the same
+    bundle so it ships as one folder rather than its own multi-hundred-megabyte
+    download.
+    """
+    from pdf_ocr.print_app import main as print_main
+
+    return print_main()
+
+
 def command_diag(arguments: argparse.Namespace) -> int:
     """Report what a folder is made of, without moving anything.
 
@@ -343,6 +383,7 @@ def command_diag(arguments: argparse.Namespace) -> int:
         logger.error("give a folder, or set input_dir in config.yaml")
         return ExitCode.ERROR
     engine = build_engine(arguments)
+    max_pages = pages_to_read(arguments, config)
 
     recursive = arguments.recursive or config.recursive
     paths = sorted(directory.rglob("*.pdf") if recursive else directory.glob("*.pdf"))
@@ -350,7 +391,7 @@ def command_diag(arguments: argparse.Namespace) -> int:
     rows: list[dict] = []
     for path in paths:
         try:
-            result, elapsed = classify_one(path, engine, rules, arguments)
+            result, elapsed = classify_one(path, engine, rules, arguments, max_pages)
         except ExtractionError as error:
             rows.append({"file": path.name, "error": str(error)})
             continue
@@ -393,6 +434,15 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         "--config",
         type=Path,
         help="path to a config.yaml of default folders (default: beside the exe)",
+    )
+    parser.add_argument(
+        "--pages",
+        type=int,
+        default=None,
+        metavar="N",
+        help="how many pages of each PDF to read (0 = all; default 1). The "
+        "best-scoring page decides, so a title on a later page still counts. "
+        "Also settable as 'pages:' in config.yaml.",
     )
     parser.add_argument("--dpi", type=int, default=DEFAULT_DPI)
     parser.add_argument(
@@ -527,6 +577,12 @@ def build_parser() -> argparse.ArgumentParser:
     gui.add_argument("-v", "--verbose", action="store_true")
     gui.set_defaults(function=command_gui)
 
+    printer = subparsers.add_parser(
+        "print", help="open the standalone print window (unrelated to sorting)"
+    )
+    printer.add_argument("-v", "--verbose", action="store_true")
+    printer.set_defaults(function=command_print)
+
     return parser
 
 
@@ -540,7 +596,9 @@ def main(argv: list[str] | None = None) -> int:
         # the people it is for open it by double-clicking. Printing help at
         # them would be doubly useless: it is not what they want, and there is
         # no console to print it to.
-        if launched_as_gui():
+        if launched_as_print():
+            argv = ["print"]
+        elif launched_as_gui():
             argv = ["gui"]
         else:
             # What a double-click on the console build produces. Argparse's

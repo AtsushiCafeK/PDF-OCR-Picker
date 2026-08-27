@@ -31,6 +31,22 @@ def sample_pdf(directory, name: str):
     return path
 
 
+def multipage_pdf(directory, filename: str, *names: str):
+    """One PDF whose pages are the named samples, written into `directory`."""
+    import pymupdf
+
+    directory.mkdir(parents=True, exist_ok=True)
+    merged = pymupdf.open()
+    parts = directory / "_parts"
+    for name in names:
+        with pymupdf.open(sample_pdf(parts, name)) as part:
+            merged.insert_pdf(part)
+    path = directory / filename
+    merged.save(path)
+    merged.close()
+    return path
+
+
 @pytest.fixture
 def inbox(tmp_path):
     """A folder of text-layer documents: one of each verdict."""
@@ -269,6 +285,33 @@ class TestGuiSubcommand:
         assert launched_as_gui() is False
 
 
+class TestPrintSubcommand:
+    """The standalone print utility ships in the same bundle, opened by its own
+    executable name or via 'print'."""
+
+    def test_it_dispatches_to_the_print_window(self, monkeypatch):
+        opened = []
+        monkeypatch.setattr("pdf_ocr.print_app.main", lambda: opened.append(True) or 0)
+        assert main(["print"]) == 0
+        assert opened == [True]
+
+    def test_the_executables_are_told_apart_by_name(self, monkeypatch):
+        from pdf_ocr.cli import launched_as_gui, launched_as_print
+
+        monkeypatch.setattr("pdf_ocr.cli.sys.frozen", True, raising=False)
+        monkeypatch.setattr(
+            "pdf_ocr.cli.sys.executable", r"C:\app\pdf-print.exe", raising=False
+        )
+        assert launched_as_print() is True
+        assert launched_as_gui() is False  # 'print' is not the gui
+
+        monkeypatch.setattr(
+            "pdf_ocr.cli.sys.executable", r"C:\app\pdf-sorter-gui.exe", raising=False
+        )
+        assert launched_as_print() is False
+        assert launched_as_gui() is True
+
+
 class TestRunBatch:
     """The loop both the headless run and the progress window share."""
 
@@ -338,6 +381,43 @@ class TestRunBatch:
         )
         assert summary["processed"] == 1
         assert summary["stopped"] is True
+
+
+class TestPages:
+    """Reading past page one, for scans whose first page is a cover sheet and
+    whose invoice is further in. The best-scoring page decides."""
+
+    def test_page_one_only_misses_an_invoice_on_page_two(self, tmp_path):
+        # Page 1 is a quotation, page 2 is an invoice.
+        pdf = multipage_pdf(tmp_path, "doc.pdf", "other_01_quotation", "invoice_01_centered")
+        assert main(["classify", str(pdf), "--no-ocr"]) == ExitCode.NOT_INVOICE
+
+    def test_reading_two_pages_finds_the_invoice(self, tmp_path, capsys):
+        pdf = multipage_pdf(tmp_path, "doc.pdf", "other_01_quotation", "invoice_01_centered")
+        code = main(["classify", str(pdf), "--no-ocr", "--pages", "2"])
+        assert code == ExitCode.INVOICE
+        # The verdict came from page two, and the log says so.
+        assert stdout_json(capsys)["page"] == 2
+
+    def test_all_pages_with_zero(self, tmp_path):
+        pdf = multipage_pdf(tmp_path, "doc.pdf", "other_01_quotation", "invoice_01_centered")
+        assert main(["classify", str(pdf), "--no-ocr", "--pages", "0"]) == ExitCode.INVOICE
+
+    def test_config_pages_is_honoured_by_batch(self, tmp_path, capsys):
+        inbox = tmp_path / "in"
+        multipage_pdf(inbox, "doc.pdf", "other_01_quotation", "invoice_01_centered")
+        config = tmp_path / "config.yaml"
+        config.write_text(f"input_dir: {inbox}\npages: 2\n", encoding="utf-8")
+        main(["batch", "--no-ocr", "--config", str(config)])
+        assert stdout_json(capsys)["verdicts"]["invoice"] == 1
+
+    def test_explicit_pages_overrides_config(self, tmp_path, capsys):
+        pdf = multipage_pdf(tmp_path, "doc.pdf", "other_01_quotation", "invoice_01_centered")
+        config = tmp_path / "config.yaml"
+        config.write_text("pages: 2\n", encoding="utf-8")
+        # --pages 1 wins over config's 2, so only the quotation page is read.
+        code = main(["classify", str(pdf), "--no-ocr", "--pages", "1", "--config", str(config)])
+        assert code == ExitCode.NOT_INVOICE
 
 
 class TestConfigDefaults:

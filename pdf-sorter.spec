@@ -83,7 +83,7 @@ analysis = Analysis(
     pathex=["src"],
     binaries=[],
     datas=datas,
-    hiddenimports=["pdf_ocr.core.ocr.easy"],
+    hiddenimports=["pdf_ocr.core.ocr.easy", "pdf_ocr.print_app"],
     hookspath=[],
     runtime_hooks=[],
     excludes=EXCLUDES,
@@ -106,13 +106,14 @@ COMMON = dict(
 # object on stdout, and a windowed build has no stdout to write it to --
 # --noconsole would not hide an interface, it would remove one.
 #
-# pdf-sorter-gui.exe is windowed, for the people who open the tuning window by
-# double-clicking it and have no use for a console behind it. It runs the same
-# module and recognises itself by its filename.
+# pdf-sorter-gui.exe (the tuning window) and pdf-print.exe (the standalone print
+# utility) are windowed, for the people who open them by double-clicking and have
+# no use for a console. Each runs this same module and recognises itself by its
+# filename.
 #
-# They are separate EXE objects sharing one COLLECT rather than two bundles,
-# because a second bundle would carry its own PyTorch and its own OCR models --
-# some 550 MB duplicated to gain nothing.
+# They are separate EXE objects sharing one COLLECT rather than separate bundles,
+# because each extra bundle would carry its own PyTorch and OCR models -- some
+# 550 MB duplicated to gain nothing (the print tool does not even use them).
 if ONEFILE:
     # One self-contained file cannot also be a second self-contained file
     # without doubling in size, so the onefile layout ships the console build
@@ -146,9 +147,19 @@ else:
         console=False,
         **COMMON,
     )
+    print_exe = EXE(
+        pyz,
+        analysis.scripts,
+        [],
+        exclude_binaries=True,
+        name="pdf-print",
+        console=False,
+        **COMMON,
+    )
     collection = COLLECT(
         console_exe,
         gui_exe,
+        print_exe,
         analysis.binaries,
         analysis.datas,
         strip=False,

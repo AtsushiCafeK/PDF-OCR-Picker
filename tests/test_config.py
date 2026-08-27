@@ -77,3 +77,23 @@ class TestRecursive:
         path = tmp_path / "config.yaml"
         Config(path=path, recursive=False, input_dir=Path("C:\\in")).save()
         assert "recursive" not in path.read_text(encoding="utf-8")
+
+
+class TestPages:
+    def test_default_is_one(self, tmp_path):
+        assert Config.load(tmp_path / "none.yaml").pages == 1
+
+    def test_it_round_trips(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        Config(path=path, pages=3).save()
+        assert Config.load(path).pages == 3
+
+    def test_zero_means_all(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        Config(path=path, pages=0).save()
+        assert Config.load(path).pages == 0
+
+    def test_the_default_is_not_written(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        Config(path=path, pages=1, input_dir=Path("C:\\in")).save()
+        assert "pages" not in path.read_text(encoding="utf-8")

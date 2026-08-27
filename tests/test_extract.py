@@ -16,6 +16,7 @@ from pdf_ocr.core.extract import (
     ExtractionError,
     extract_first_page,
     extract_page,
+    extract_pages,
     has_usable_text_layer,
     render,
     text_layer_blocks,
@@ -49,6 +50,51 @@ def sample_pdf(tmp_path, name: str):
     document.save(path)
     document.close()
     return path
+
+
+def multipage_pdf(tmp_path, *names: str):
+    """A single PDF whose pages are the named samples, in order."""
+    merged = pymupdf.open()
+    for name in names:
+        with pymupdf.open(sample_pdf(tmp_path, name)) as part:
+            merged.insert_pdf(part)
+    path = tmp_path / ("+".join(names) + ".pdf")
+    merged.save(path)
+    merged.close()
+    return path
+
+
+class TestMultiplePages:
+    def test_first_page_only_by_default(self, tmp_path):
+        path = multipage_pdf(tmp_path, "other_01_quotation", "invoice_01_centered")
+        pages = extract_pages(path)
+        assert len(pages) == 1
+        assert any("見積" in b.text for b in pages[0].blocks)
+
+    def test_reads_up_to_max_pages(self, tmp_path):
+        path = multipage_pdf(tmp_path, "other_01_quotation", "invoice_01_centered")
+        pages = extract_pages(path, max_pages=2)
+        assert len(pages) == 2
+        assert any("請求書" in b.text for b in pages[1].blocks)
+
+    def test_max_pages_beyond_the_document_is_capped(self, tmp_path):
+        path = multipage_pdf(tmp_path, "invoice_01_centered")
+        assert len(extract_pages(path, max_pages=5)) == 1
+
+    def test_zero_means_all_pages(self, tmp_path):
+        path = multipage_pdf(tmp_path, "other_01_quotation", "invoice_01_centered")
+        assert len(extract_pages(path, max_pages=0)) == 2
+
+    def test_pages_are_numbered_in_order(self, tmp_path):
+        path = multipage_pdf(tmp_path, "other_01_quotation", "invoice_01_centered")
+        pages = extract_pages(path, max_pages=2)
+        assert [p.number for p in pages] == [1, 2]
+
+    def test_extract_first_page_is_the_single_page_shortcut(self, tmp_path):
+        path = multipage_pdf(tmp_path, "other_01_quotation", "invoice_01_centered")
+        page = extract_first_page(path)
+        assert page.number == 1
+        assert any("見積" in b.text for b in page.blocks)
 
 
 class TestTextLayerDetection:

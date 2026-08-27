@@ -39,6 +39,10 @@ class Config:
     recursive: bool = False
     """Whether to include documents in subfolders of the input folder."""
 
+    pages: int = 1
+    """How many pages of each PDF to read (0 = all). The best-scoring page
+    decides the verdict, so a title on a later page still counts."""
+
     path: Path | None = None
     """Where this was loaded from and will be saved to. Not written into the
     file itself."""
@@ -58,7 +62,12 @@ class Config:
         values = {
             field: (Path(data[field]) if data.get(field) else None) for field in _FIELDS
         }
-        return cls(path=path, recursive=bool(data.get("recursive", False)), **values)
+        return cls(
+            path=path,
+            recursive=bool(data.get("recursive", False)),
+            pages=int(data.get("pages", 1)),
+            **values,
+        )
 
     def save(self) -> None:
         """Write the set fields back, so a folder chosen once is remembered.
@@ -76,6 +85,8 @@ class Config:
         }
         if self.recursive:
             data["recursive"] = True
+        if self.pages != 1:
+            data["pages"] = self.pages
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
             yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8"
