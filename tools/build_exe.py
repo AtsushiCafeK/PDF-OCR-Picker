@@ -24,6 +24,13 @@ SPEC = PROJECT_ROOT / "pdf-sorter.spec"
 DIST_ROOT = PROJECT_ROOT / "dist"
 RULES = PROJECT_ROOT / "src" / "pdf_ocr" / "rules.yaml"
 MODELS = PROJECT_ROOT / "models"
+# End-user usage guide shipped inside the bundle. Separate from the repo's
+# top-level README.md, which is for developers; this one is for whoever
+# extracts the zip and needs to know the folder must stay together.
+DIST_README = PROJECT_ROOT / "packaging" / "README.md"
+# A ready-to-edit batch file for running the sorter without the GUI. It calls
+# the exe beside itself (via %~dp0), so it only works shipped in the bundle.
+DIST_SAMPLE_BAT = PROJECT_ROOT / "packaging" / "sample.bat"
 
 
 def directory_size(path: Path) -> int:
@@ -134,6 +141,8 @@ def main() -> None:
     code_size = directory_size(beside)
 
     shutil.copy2(RULES, beside / "rules.yaml")
+    shutil.copy2(DIST_README, beside / "README.md")
+    shutil.copy2(DIST_SAMPLE_BAT, beside / "sample.bat")
     if not arguments.skip_models:
         shutil.copytree(MODELS, beside / "models", dirs_exist_ok=True)
 
