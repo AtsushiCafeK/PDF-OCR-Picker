@@ -15,6 +15,7 @@ Runs as its own executable (pdf-print.exe) or ``pdf-sorter print``.
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -148,27 +149,57 @@ def collect_pdfs(paths: Iterable[Path], recursive: bool = False) -> list[Path]:
     return result
 
 
+_DRIVE_LETTER = re.compile(r"[A-Za-z]:")
+
+
+def _is_local_drive_path(path: Path) -> bool:
+    """Whether a path sits on a real local drive letter, e.g. ``C:\\...``.
+
+    Rejects UNC and device-namespace paths in every spelling: pathlib's
+    ``drive`` canonicalises ``\\\\server\\share``, ``//server/share`` and
+    ``\\\\?\\UNC\\server\\share`` all to a UNC drive, so testing the drive closes
+    the mixed-separator and device-namespace variants that a literal prefix
+    check would miss. The resolved target is checked too, so a symlink or
+    junction pointing at a UNC share is caught as well.
+
+    Why it matters: opening a file on a remote host makes Windows authenticate
+    to that host over SMB. A drag from an untrusted source (a web page, or a
+    document offering a crafted ``file://`` link) could otherwise force an
+    outbound authentication and leak the user's credentials. A mapped network
+    drive letter stays allowed -- that is a connection the user set up to a host
+    they already trust, not one an attacker chose.
+    """
+    for candidate in (path, _safe_resolve(path)):
+        if not _DRIVE_LETTER.fullmatch(candidate.drive):
+            return False
+    return True
+
+
+def _safe_resolve(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
 def local_paths(mime) -> list[Path]:
     """Local filesystem paths from a drag-and-drop payload.
 
-    A drop carries URLs; only the ones naming a file or folder on this machine
-    are kept, and folders are kept as-is -- ``collect_pdfs``, via ``_add_paths``,
+    A drop carries URLs; only the ones naming a file or folder on a local drive
+    of this machine are kept (see ``_is_local_drive_path`` for why remote paths
+    are refused). Folders are kept as-is -- ``collect_pdfs``, via ``_add_paths``,
     expands them into their PDFs.
-
-    A file URL that carries a host (``file://server/share/x.pdf``, i.e. a UNC
-    path) is rejected on purpose. Opening such a path makes Windows authenticate
-    to ``server`` over SMB, so a drag from an untrusted source -- a web page or a
-    document offering a crafted ``file://`` link -- could force an outbound
-    authentication and leak the user's credentials. Only genuinely local paths,
-    with no remote authority, are accepted.
     """
     paths: list[Path] = []
     for url in mime.urls():
         if not url.isLocalFile() or url.host():
             continue
         local = url.toLocalFile()
-        if local and not local.startswith(("\\\\", "//")):
-            paths.append(Path(local))
+        if not local:
+            continue
+        candidate = Path(local)
+        if _is_local_drive_path(candidate):
+            paths.append(candidate)
     return paths
 
 

@@ -267,6 +267,21 @@ class TestDragAndDrop:
         )
         assert local_paths(mime) == [a]
 
+    def test_unc_paths_are_rejected_in_every_spelling(self, tmp_path):
+        # Mixed separators and the device namespace must not slip past the UNC
+        # filter -- the check is on the canonical drive, not a literal prefix.
+        a = sample_pdf(tmp_path, "invoice_01_centered")
+        mime = QMimeData()
+        mime.setUrls(
+            [
+                QUrl("file:///\\\\evil-server/share/x.pdf"),
+                QUrl.fromLocalFile("\\\\evil-server\\share\\y.pdf"),
+                QUrl.fromLocalFile("\\\\?\\UNC\\evil-server\\share\\z.pdf"),
+                QUrl.fromLocalFile(str(a)),
+            ]
+        )
+        assert local_paths(mime) == [a]
+
     def test_dropping_files_queues_them(self, app, tmp_path):
         a = sample_pdf(tmp_path, "invoice_01_centered")
         b = sample_pdf(tmp_path, "other_01_quotation")
