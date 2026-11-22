@@ -151,15 +151,23 @@ def collect_pdfs(paths: Iterable[Path], recursive: bool = False) -> list[Path]:
 def local_paths(mime) -> list[Path]:
     """Local filesystem paths from a drag-and-drop payload.
 
-    A drop carries URLs; the ones that name a local file or folder convert to a
-    path, and anything else (a web URL dragged from a browser, say) yields an
-    empty string and is dropped. Folders are kept as-is -- ``collect_pdfs``, via
-    ``_add_paths``, expands them into their PDFs.
+    A drop carries URLs; only the ones naming a file or folder on this machine
+    are kept, and folders are kept as-is -- ``collect_pdfs``, via ``_add_paths``,
+    expands them into their PDFs.
+
+    A file URL that carries a host (``file://server/share/x.pdf``, i.e. a UNC
+    path) is rejected on purpose. Opening such a path makes Windows authenticate
+    to ``server`` over SMB, so a drag from an untrusted source -- a web page or a
+    document offering a crafted ``file://`` link -- could force an outbound
+    authentication and leak the user's credentials. Only genuinely local paths,
+    with no remote authority, are accepted.
     """
     paths: list[Path] = []
     for url in mime.urls():
+        if not url.isLocalFile() or url.host():
+            continue
         local = url.toLocalFile()
-        if local:
+        if local and not local.startswith(("\\\\", "//")):
             paths.append(Path(local))
     return paths
 

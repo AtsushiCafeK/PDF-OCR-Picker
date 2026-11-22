@@ -257,6 +257,16 @@ class TestDragAndDrop:
         mime.setUrls([QUrl.fromLocalFile(str(a)), QUrl("https://example.com/x.pdf")])
         assert local_paths(mime) == [a]
 
+    def test_remote_host_file_urls_are_rejected(self, tmp_path):
+        # A file:// URL with a host is a UNC path; opening it would force an SMB
+        # authentication to that host, so it must never be queued from a drop.
+        a = sample_pdf(tmp_path, "invoice_01_centered")
+        mime = QMimeData()
+        mime.setUrls(
+            [QUrl("file://evil-server/share/x.pdf"), QUrl.fromLocalFile(str(a))]
+        )
+        assert local_paths(mime) == [a]
+
     def test_dropping_files_queues_them(self, app, tmp_path):
         a = sample_pdf(tmp_path, "invoice_01_centered")
         b = sample_pdf(tmp_path, "other_01_quotation")
