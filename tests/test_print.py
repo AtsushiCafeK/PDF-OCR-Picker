@@ -244,7 +244,7 @@ class TestWindow:
         app.processEvents()
 
     def test_it_builds(self, window):
-        assert window.windowTitle() == "PDF print"
+        assert window.windowTitle() == "PDF印刷"
 
     def test_adding_files_queues_them(self, window, tmp_path):
         a = sample_pdf(tmp_path, "invoice_01_centered")

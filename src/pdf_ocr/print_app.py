@@ -281,7 +281,7 @@ def available_printer_names() -> list[str]:
 class PrintWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("PDF print")
+        self.setWindowTitle("PDF印刷")
         self.resize(560, 520)
         self._stop = False
         self._printing = False
@@ -290,24 +290,24 @@ class PrintWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
-        layout.addWidget(QLabel("Documents to print"))
+        layout.addWidget(QLabel("印刷するファイル"))
         self.file_list = QListWidget()
         self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         layout.addWidget(self.file_list, 1)
 
         add_row = QHBoxLayout()
         for caption, slot in (
-            ("Add files...", self._add_files),
-            ("Add folder...", self._add_folder),
-            ("Remove", self._remove_selected),
-            ("Clear", self._clear),
+            ("ファイルを追加…", self._add_files),
+            ("フォルダを追加…", self._add_folder),
+            ("削除", self._remove_selected),
+            ("クリア", self._clear),
         ):
             button = QPushButton(caption)
             button.clicked.connect(slot)
             add_row.addWidget(button)
         layout.addLayout(add_row)
 
-        self.recurse_check = QCheckBox("Include subfolders when adding a folder")
+        self.recurse_check = QCheckBox("フォルダ追加時にサブフォルダも含める")
         layout.addWidget(self.recurse_check)
 
         # The settings the print dialog adjusts live on one long-lived QPrinter,
@@ -317,41 +317,41 @@ class PrintWindow(QMainWindow):
         # On by default: the reason the tool exists is to stop wasted sheets when
         # a PDF's orientation and the printer's disagree.
         self.prefer_orientation_check = QCheckBox(
-            "Match each page's orientation to the PDF (auto-fit portrait/landscape)"
+            "PDFの向きを優先する（縦・横を自動で合わせ、用紙いっぱいに印刷）"
         )
         self.prefer_orientation_check.setChecked(True)
         layout.addWidget(self.prefer_orientation_check)
 
         printer_row = QHBoxLayout()
-        printer_row.addWidget(QLabel("Printer"))
+        printer_row.addWidget(QLabel("プリンター"))
         self.printer_combo = QComboBox()
         printer_row.addWidget(self.printer_combo, 1)
-        self.page_setup_button = QPushButton("Paper setup...")
+        self.page_setup_button = QPushButton("用紙設定…")
         self.page_setup_button.setToolTip(
-            "Choose paper size, sides (duplex), page range and more -- only the "
-            "options this printer supports are offered."
+            "用紙サイズ・両面・ページ範囲などを設定します。"
+            "このプリンターが対応している項目だけが表示されます。"
         )
         self.page_setup_button.clicked.connect(self._page_setup)
         printer_row.addWidget(self.page_setup_button)
-        printer_row.addWidget(QLabel("Copies"))
+        printer_row.addWidget(QLabel("部数"))
         self.copies_spin = QSpinBox()
         self.copies_spin.setRange(1, 99)
         printer_row.addWidget(self.copies_spin)
         layout.addLayout(printer_row)
 
         run_row = QHBoxLayout()
-        self.preview_button = QPushButton("Preview")
-        self.preview_button.setToolTip("See how the pages land on the paper before printing.")
+        self.preview_button = QPushButton("プレビュー")
+        self.preview_button.setToolTip("印刷前に、各ページが用紙にどう載るかを確認します。")
         self.preview_button.clicked.connect(self._preview)
         run_row.addWidget(self.preview_button)
-        self.print_button = QPushButton("Print")
+        self.print_button = QPushButton("印刷")
         self.print_button.clicked.connect(self._print)
         run_row.addWidget(self.print_button, 1)
-        self.stop_button = QPushButton("Stop")
+        self.stop_button = QPushButton("停止")
         self.stop_button.setEnabled(False)
         self.stop_button.setToolTip(
-            "Stop printing. Pages already sent to the printer may still come "
-            "out; nothing after the current point is sent."
+            "印刷を停止します。すでにプリンターへ送られたページは出ることが"
+            "あります。それ以降は送信しません。"
         )
         self.stop_button.clicked.connect(self._request_stop)
         run_row.addWidget(self.stop_button)
@@ -364,15 +364,15 @@ class PrintWindow(QMainWindow):
         self.copies_spin.valueChanged.connect(self._on_copies_changed)
         self._on_printer_changed(self.printer_combo.currentText())
         self._build_menu()
-        self.statusBar().showMessage("Add files or a folder, choose a printer, then Print.")
+        self.statusBar().showMessage("ファイルかフォルダを追加し、プリンターを選んで「印刷」します。")
 
     # -- construction ------------------------------------------------------
 
     def _build_menu(self) -> None:
-        file_menu = self.menuBar().addMenu("&File")
+        file_menu = self.menuBar().addMenu("ファイル(&F)")
         for caption, shortcut, slot in (
-            ("Add files...", "Ctrl+O", self._add_files),
-            ("Add folder...", "Ctrl+Shift+O", self._add_folder),
+            ("ファイルを追加…", "Ctrl+O", self._add_files),
+            ("フォルダを追加…", "Ctrl+Shift+O", self._add_folder),
         ):
             action = QAction(caption, self)
             action.setShortcut(shortcut)
@@ -389,7 +389,7 @@ class PrintWindow(QMainWindow):
                 self.printer_combo.setCurrentIndex(index)
         if not names:
             self.print_button.setEnabled(False)
-            self.statusBar().showMessage("No printers found on this PC.")
+            self.statusBar().showMessage("このPCにプリンターが見つかりません。")
 
     # -- printer settings --------------------------------------------------
 
@@ -408,14 +408,14 @@ class PrintWindow(QMainWindow):
         combo and the copies box.
         """
         dialog = QPrintDialog(self._printer, self)
-        dialog.setWindowTitle("Paper setup")
+        dialog.setWindowTitle("用紙設定")
         if not dialog.exec():
             return
         index = self.printer_combo.findText(self._printer.printerName())
         if index >= 0:
             self.printer_combo.setCurrentIndex(index)
         self.copies_spin.setValue(max(1, self._printer.copyCount()))
-        self.statusBar().showMessage("Paper settings updated.")
+        self.statusBar().showMessage("用紙設定を更新しました。")
 
     def _current_page_range(self) -> tuple[int, int] | None:
         """The page range chosen in the print dialog, or None for every page."""
@@ -439,17 +439,17 @@ class PrintWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, path)
             self.file_list.addItem(item)
             added += 1
-        self.statusBar().showMessage(f"{self.file_list.count()} document(s) queued.")
+        self.statusBar().showMessage(f"{self.file_list.count()} 件をキューに追加しました。")
         if added == 0 and paths:
-            self.statusBar().showMessage("No new PDFs to add.")
+            self.statusBar().showMessage("追加する新しいPDFはありません。")
 
     def _add_files(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(self, "Add PDFs", "", "PDF files (*.pdf)")
+        files, _ = QFileDialog.getOpenFileNames(self, "PDFを追加", "", "PDFファイル (*.pdf)")
         if files:
             self._add_paths([Path(f) for f in files])
 
     def _add_folder(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "Add a folder of PDFs")
+        directory = QFileDialog.getExistingDirectory(self, "PDFのフォルダを追加")
         if directory:
             self._add_paths([Path(directory)])
 
@@ -459,7 +459,7 @@ class PrintWindow(QMainWindow):
 
     def _clear(self) -> None:
         self.file_list.clear()
-        self.statusBar().showMessage("Queue cleared.")
+        self.statusBar().showMessage("キューをクリアしました。")
 
     def _queued_files(self) -> list[Path]:
         return [
@@ -472,7 +472,7 @@ class PrintWindow(QMainWindow):
     def _request_stop(self) -> None:
         self._stop = True
         self.stop_button.setEnabled(False)
-        self.statusBar().showMessage("Stopping...")
+        self.statusBar().showMessage("停止中…")
 
     def _check_stop(self) -> bool:
         # Pump events so a Stop click is seen, then report whether it happened.
@@ -482,10 +482,10 @@ class PrintWindow(QMainWindow):
     def _preview(self) -> None:
         files = self._queued_files()
         if not files:
-            QMessageBox.information(self, "Preview", "Add some documents first.")
+            QMessageBox.information(self, "プレビュー", "先にファイルを追加してください。")
             return
         preview = QPrintPreviewDialog(self._printer, self)
-        preview.setWindowTitle("Print preview")
+        preview.setWindowTitle("印刷プレビュー")
         preview.paintRequested.connect(self._render_preview)
         preview.exec()
         preview.paintRequested.disconnect(self._render_preview)
@@ -532,10 +532,10 @@ class PrintWindow(QMainWindow):
     def _print(self) -> None:
         files = self._queued_files()
         if not files:
-            QMessageBox.information(self, "Print", "Add some documents first.")
+            QMessageBox.information(self, "印刷", "先にファイルを追加してください。")
             return
         if self.printer_combo.count() == 0:
-            QMessageBox.information(self, "Print", "No printer is available.")
+            QMessageBox.information(self, "印刷", "利用できるプリンターがありません。")
             return
 
         prefer = self.prefer_orientation_check.isChecked()
@@ -556,21 +556,21 @@ class PrintWindow(QMainWindow):
                 )
             except Exception as error:  # a bad PDF should not abandon the queue
                 logger.error("could not print %s: %s", path.name, error)
-                self.statusBar().showMessage(f"Skipped {path.name}: {error}")
+                self.statusBar().showMessage(f"スキップ: {path.name}（{error}）")
                 return True  # treat as handled; move on to the next file
 
         printed, total, stopped = run_print_job(
             files,
             print_one,
             on_progress=lambda done, count, path: self.statusBar().showMessage(
-                f"Printing {done}/{count}: {path.name}"
+                f"印刷中 {done}/{count}: {path.name}"
             ),
             should_stop=self._check_stop,
         )
 
         self._set_printing(False)
-        prefix = "Stopped" if stopped else "Finished"
-        self.statusBar().showMessage(f"{prefix}. Printed {printed} of {total}.")
+        prefix = "停止しました" if stopped else "完了しました"
+        self.statusBar().showMessage(f"{prefix}。{printed}/{total} 件を印刷しました。")
 
     def _set_printing(self, printing: bool) -> None:
         self._printing = printing
