@@ -21,8 +21,13 @@ from pathlib import Path
 
 import pymupdf
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QImage, QPainter
-from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
+from PySide6.QtGui import QAction, QImage, QPageLayout, QPainter, QTransform
+from PySide6.QtPrintSupport import (
+    QPrintDialog,
+    QPrinter,
+    QPrinterInfo,
+    QPrintPreviewDialog,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -46,6 +51,70 @@ logger = logging.getLogger(__name__)
 PRINT_DPI = 200
 """Resolution to rasterise pages at. Enough for text to print cleanly without
 making each page image needlessly large."""
+
+
+# --------------------------------------------------------------------------
+# Orientation and page-range logic -- pure functions, so they can be tested
+# without a printer, a document or a window.
+# --------------------------------------------------------------------------
+
+
+def is_landscape(rect: pymupdf.Rect) -> bool:
+    """Whether a page is wider than it is tall."""
+    return rect.width > rect.height
+
+
+def needs_rotation(page_is_landscape: bool, paper_is_landscape: bool) -> bool:
+    """Whether the page image must turn a quarter to match the paper's shape.
+
+    This is the safety net that stops a sheet being wasted: even if the printer
+    driver ignores a per-page orientation change, rotating the image makes a
+    landscape page fill a portrait sheet (and the reverse) instead of printing
+    small and centred with half the paper blank.
+    """
+    return page_is_landscape != paper_is_landscape
+
+
+def clamp_page_range(first: int, last: int, page_count: int) -> list[int]:
+    """0-based page indices for a 1-based inclusive range, clamped to the document.
+
+    A ``first`` or ``last`` of 0 means that end is open. Applied per document, so
+    a range from the print dialog is clamped to each file's own length rather
+    than failing on a file shorter than the range.
+    """
+    start = first if first and first > 0 else 1
+    end = last if last and last > 0 else page_count
+    start = max(1, start)
+    end = min(page_count, end)
+    if end < start:
+        return []
+    return list(range(start - 1, end))
+
+
+def _orientation_for(page: pymupdf.Page) -> QPageLayout.Orientation:
+    if is_landscape(page.rect):
+        return QPageLayout.Orientation.Landscape
+    return QPageLayout.Orientation.Portrait
+
+
+def _first_page_orientation(
+    files: list[Path], page_range: tuple[int, int] | None
+) -> QPageLayout.Orientation | None:
+    """The orientation of the very first page that will actually be printed.
+
+    The first page's orientation has to be set before the print job begins --
+    unlike later pages, which are set just before ``newPage()`` -- so both the
+    print and preview paths need to know it up front.
+    """
+    for path in files:
+        with pymupdf.open(path) as document:
+            if page_range is None:
+                indices: Iterable[int] = range(document.page_count)
+            else:
+                indices = clamp_page_range(page_range[0], page_range[1], document.page_count)
+            for page_index in indices:
+                return _orientation_for(document[page_index])
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -114,17 +183,39 @@ def print_pdf(
     printer: QPrinter,
     *,
     copies: int = 1,
+    prefer_pdf_orientation: bool = True,
+    page_range: tuple[int, int] | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> bool:
     """Print one PDF onto ``printer``. Returns False if it was stopped partway.
 
     Stopping is checked before each page: the pages already sent print, the rest
     do not. A page in flight to the spooler cannot be recalled.
+
+    When ``prefer_pdf_orientation`` is on, each page decides the paper's
+    orientation from its own shape -- so a landscape page prints on a landscape
+    sheet -- and the rendered image is turned a quarter where the sheet still
+    does not match, so a page always fills the paper instead of wasting it. This
+    is the whole point of the tool over a generic print path: because it rasters
+    and paints each page itself, the PDF's geometry wins over the driver's.
+
+    ``page_range`` is a 1-based inclusive ``(first, last)``, clamped to this
+    document; ``None`` prints every page.
     """
     with pymupdf.open(path) as document:
         printer.setDocName(path.name)
         if copies > 1:
             printer.setCopyCount(copies)
+
+        if page_range is None:
+            indices = list(range(document.page_count))
+        else:
+            indices = clamp_page_range(page_range[0], page_range[1], document.page_count)
+        if not indices:
+            return True  # nothing selected in this file; not a stop
+
+        if prefer_pdf_orientation:
+            printer.setPageOrientation(_orientation_for(document[indices[0]]))
 
         painter = QPainter()
         if not painter.begin(printer):
@@ -132,20 +223,28 @@ def print_pdf(
 
         stopped = False
         try:
-            for page_index in range(document.page_count):
+            for position, page_index in enumerate(indices):
                 if should_stop is not None and should_stop():
                     stopped = True
                     break
-                if page_index > 0:
+                if position > 0:
+                    if prefer_pdf_orientation:
+                        printer.setPageOrientation(_orientation_for(document[page_index]))
                     printer.newPage()
-                _draw_page(painter, document[page_index])
+                _draw_page(painter, document[page_index], fit_orientation=prefer_pdf_orientation)
         finally:
             painter.end()
     return not stopped
 
 
-def _draw_page(painter: QPainter, page: pymupdf.Page) -> None:
-    """Render a page and paint it centred and scaled to fit the printable area."""
+def _draw_page(
+    painter: QPainter, page: pymupdf.Page, *, fit_orientation: bool = False
+) -> None:
+    """Render a page and paint it centred and scaled to fit the printable area.
+
+    With ``fit_orientation`` on, a page whose shape disagrees with the paper is
+    turned a quarter first, so it fills the sheet rather than printing small.
+    """
     pixmap = page.get_pixmap(dpi=PRINT_DPI, alpha=False)
     image = QImage(
         pixmap.samples, pixmap.width, pixmap.height, pixmap.stride,
@@ -153,6 +252,13 @@ def _draw_page(painter: QPainter, page: pymupdf.Page) -> None:
     ).copy()  # copy: the pixmap buffer must not outlive this call otherwise
 
     area = painter.viewport()
+    if fit_orientation and needs_rotation(
+        image.width() > image.height(), area.width() > area.height()
+    ):
+        image = image.transformed(
+            QTransform().rotate(90), Qt.TransformationMode.SmoothTransformation
+        )
+
     scaled = image.scaled(
         area.size(),
         Qt.AspectRatioMode.KeepAspectRatio,
@@ -165,13 +271,6 @@ def _draw_page(painter: QPainter, page: pymupdf.Page) -> None:
 
 def available_printer_names() -> list[str]:
     return [info.printerName() for info in QPrinterInfo.availablePrinters()]
-
-
-def _printer_for(name: str) -> QPrinter:
-    for info in QPrinterInfo.availablePrinters():
-        if info.printerName() == name:
-            return QPrinter(info, QPrinter.PrinterMode.HighResolution)
-    return QPrinter(QPrinter.PrinterMode.HighResolution)
 
 
 # --------------------------------------------------------------------------
@@ -211,10 +310,29 @@ class PrintWindow(QMainWindow):
         self.recurse_check = QCheckBox("Include subfolders when adding a folder")
         layout.addWidget(self.recurse_check)
 
+        # The settings the print dialog adjusts live on one long-lived QPrinter,
+        # so what you set in "Paper setup..." is what both Preview and Print use.
+        self._printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+
+        # On by default: the reason the tool exists is to stop wasted sheets when
+        # a PDF's orientation and the printer's disagree.
+        self.prefer_orientation_check = QCheckBox(
+            "Match each page's orientation to the PDF (auto-fit portrait/landscape)"
+        )
+        self.prefer_orientation_check.setChecked(True)
+        layout.addWidget(self.prefer_orientation_check)
+
         printer_row = QHBoxLayout()
         printer_row.addWidget(QLabel("Printer"))
         self.printer_combo = QComboBox()
         printer_row.addWidget(self.printer_combo, 1)
+        self.page_setup_button = QPushButton("Paper setup...")
+        self.page_setup_button.setToolTip(
+            "Choose paper size, sides (duplex), page range and more -- only the "
+            "options this printer supports are offered."
+        )
+        self.page_setup_button.clicked.connect(self._page_setup)
+        printer_row.addWidget(self.page_setup_button)
         printer_row.addWidget(QLabel("Copies"))
         self.copies_spin = QSpinBox()
         self.copies_spin.setRange(1, 99)
@@ -222,6 +340,10 @@ class PrintWindow(QMainWindow):
         layout.addLayout(printer_row)
 
         run_row = QHBoxLayout()
+        self.preview_button = QPushButton("Preview")
+        self.preview_button.setToolTip("See how the pages land on the paper before printing.")
+        self.preview_button.clicked.connect(self._preview)
+        run_row.addWidget(self.preview_button)
         self.print_button = QPushButton("Print")
         self.print_button.clicked.connect(self._print)
         run_row.addWidget(self.print_button, 1)
@@ -236,6 +358,11 @@ class PrintWindow(QMainWindow):
         layout.addLayout(run_row)
 
         self._load_printers()
+        # Wire the printer/copies controls to the shared QPrinter after loading,
+        # so populating the combo does not fire a change into a half-built state.
+        self.printer_combo.currentTextChanged.connect(self._on_printer_changed)
+        self.copies_spin.valueChanged.connect(self._on_copies_changed)
+        self._on_printer_changed(self.printer_combo.currentText())
         self._build_menu()
         self.statusBar().showMessage("Add files or a folder, choose a printer, then Print.")
 
@@ -263,6 +390,38 @@ class PrintWindow(QMainWindow):
         if not names:
             self.print_button.setEnabled(False)
             self.statusBar().showMessage("No printers found on this PC.")
+
+    # -- printer settings --------------------------------------------------
+
+    def _on_printer_changed(self, name: str) -> None:
+        if name:
+            self._printer.setPrinterName(name)
+
+    def _on_copies_changed(self, count: int) -> None:
+        self._printer.setCopyCount(max(1, count))
+
+    def _page_setup(self) -> None:
+        """Open the OS print dialog to set paper size, duplex, range, etc.
+
+        The native dialog only offers what the chosen printer supports, so there
+        is nothing to validate here; we just reflect its result back into the
+        combo and the copies box.
+        """
+        dialog = QPrintDialog(self._printer, self)
+        dialog.setWindowTitle("Paper setup")
+        if not dialog.exec():
+            return
+        index = self.printer_combo.findText(self._printer.printerName())
+        if index >= 0:
+            self.printer_combo.setCurrentIndex(index)
+        self.copies_spin.setValue(max(1, self._printer.copyCount()))
+        self.statusBar().showMessage("Paper settings updated.")
+
+    def _current_page_range(self) -> tuple[int, int] | None:
+        """The page range chosen in the print dialog, or None for every page."""
+        if self._printer.printRange() == QPrinter.PrintRange.PageRange:
+            return (self._printer.fromPage(), self._printer.toPage())
+        return None
 
     # -- file list ---------------------------------------------------------
 
@@ -320,6 +479,56 @@ class PrintWindow(QMainWindow):
         QApplication.processEvents()
         return self._stop
 
+    def _preview(self) -> None:
+        files = self._queued_files()
+        if not files:
+            QMessageBox.information(self, "Preview", "Add some documents first.")
+            return
+        preview = QPrintPreviewDialog(self._printer, self)
+        preview.setWindowTitle("Print preview")
+        preview.paintRequested.connect(self._render_preview)
+        preview.exec()
+        preview.paintRequested.disconnect(self._render_preview)
+
+    def _render_preview(self, printer: QPrinter) -> None:
+        """Paint every queued page into the preview, exactly as printing would.
+
+        Shares the orientation logic with the real print path so the preview is
+        honest: what you see here is what the paper will show.
+        """
+        prefer = self.prefer_orientation_check.isChecked()
+        page_range = self._current_page_range()
+        files = self._queued_files()
+
+        if prefer:
+            first_orientation = _first_page_orientation(files, page_range)
+            if first_orientation is not None:
+                printer.setPageOrientation(first_orientation)
+
+        painter = QPainter()
+        if not painter.begin(printer):
+            return
+        try:
+            first = True
+            for path in files:
+                with pymupdf.open(path) as document:
+                    if page_range is None:
+                        indices: Iterable[int] = range(document.page_count)
+                    else:
+                        indices = clamp_page_range(
+                            page_range[0], page_range[1], document.page_count
+                        )
+                    for page_index in indices:
+                        page = document[page_index]
+                        if prefer:
+                            printer.setPageOrientation(_orientation_for(page))
+                        if not first:
+                            printer.newPage()
+                        first = False
+                        _draw_page(painter, page, fit_orientation=prefer)
+        finally:
+            painter.end()
+
     def _print(self) -> None:
         files = self._queued_files()
         if not files:
@@ -329,14 +538,22 @@ class PrintWindow(QMainWindow):
             QMessageBox.information(self, "Print", "No printer is available.")
             return
 
-        printer = _printer_for(self.printer_combo.currentText())
+        prefer = self.prefer_orientation_check.isChecked()
+        page_range = self._current_page_range()
         copies = self.copies_spin.value()
         self._stop = False
         self._set_printing(True)
 
         def print_one(path: Path) -> bool:
             try:
-                return print_pdf(path, printer, copies=copies, should_stop=self._check_stop)
+                return print_pdf(
+                    path,
+                    self._printer,
+                    copies=copies,
+                    prefer_pdf_orientation=prefer,
+                    page_range=page_range,
+                    should_stop=self._check_stop,
+                )
             except Exception as error:  # a bad PDF should not abandon the queue
                 logger.error("could not print %s: %s", path.name, error)
                 self.statusBar().showMessage(f"Skipped {path.name}: {error}")
@@ -358,6 +575,8 @@ class PrintWindow(QMainWindow):
     def _set_printing(self, printing: bool) -> None:
         self._printing = printing
         self.print_button.setEnabled(not printing)
+        self.preview_button.setEnabled(not printing)
+        self.page_setup_button.setEnabled(not printing)
         self.stop_button.setEnabled(printing)
         self.file_list.setEnabled(not printing)
 

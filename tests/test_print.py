@@ -19,11 +19,26 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from pdf_ocr.print_app import (  # noqa: E402
     PrintWindow,
+    clamp_page_range,
     collect_pdfs,
+    is_landscape,
+    needs_rotation,
     print_pdf,
     run_print_job,
 )
 from tools.sample_pdfs import SAMPLES, build  # noqa: E402
+
+
+def sized_pdf(directory, filename, *sizes):
+    """A blank PDF whose pages have the given (width, height) point sizes."""
+    directory.mkdir(parents=True, exist_ok=True)
+    doc = pymupdf.open()
+    for width, height in sizes:
+        doc.new_page(width=width, height=height)
+    path = directory / filename
+    doc.save(path)
+    doc.close()
+    return path
 
 
 @pytest.fixture(scope="module")
@@ -151,6 +166,74 @@ class TestPrintPdf:
             assert printed.page_count == 1
 
 
+class TestOrientationHelpers:
+    def test_landscape_is_wider_than_tall(self):
+        assert is_landscape(pymupdf.Rect(0, 0, 800, 600)) is True
+        assert is_landscape(pymupdf.Rect(0, 0, 600, 800)) is False
+
+    def test_a_square_page_is_not_landscape(self):
+        assert is_landscape(pymupdf.Rect(0, 0, 500, 500)) is False
+
+    def test_rotation_needed_only_when_shapes_disagree(self):
+        assert needs_rotation(True, False) is True
+        assert needs_rotation(False, True) is True
+        assert needs_rotation(True, True) is False
+        assert needs_rotation(False, False) is False
+
+
+class TestClampPageRange:
+    def test_a_full_range_is_every_page(self):
+        assert clamp_page_range(1, 3, 3) == [0, 1, 2]
+
+    def test_a_subset(self):
+        assert clamp_page_range(2, 2, 5) == [1]
+
+    def test_open_ends_mean_the_whole_document(self):
+        assert clamp_page_range(0, 0, 3) == [0, 1, 2]
+
+    def test_the_end_is_clamped_to_the_document(self):
+        assert clamp_page_range(2, 99, 3) == [1, 2]
+
+    def test_a_start_past_the_end_selects_nothing(self):
+        assert clamp_page_range(5, 2, 3) == []
+        assert clamp_page_range(9, 0, 3) == []
+
+
+class TestOrientationPrinting:
+    """The orientation preference, exercised through QPrinter's PDF output."""
+
+    def _printer(self, out):
+        printer = QPrinter()
+        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+        printer.setOutputFileName(str(out))
+        return printer
+
+    def test_a_landscape_page_prints_on_a_landscape_sheet_when_preferred(self, app, tmp_path):
+        src = sized_pdf(tmp_path, "land.pdf", (800, 600))
+        out = tmp_path / "out.pdf"
+        assert print_pdf(src, self._printer(out), prefer_pdf_orientation=True) is True
+        with pymupdf.open(out) as printed:
+            page = printed[0]
+            assert page.rect.width > page.rect.height
+
+    def test_orientation_is_left_to_the_printer_when_not_preferred(self, app, tmp_path):
+        # A landscape source, but the preference off: the sheet keeps the
+        # printer's own (portrait) default and the page is not rotated to fit.
+        src = sized_pdf(tmp_path, "land.pdf", (800, 600))
+        out = tmp_path / "out.pdf"
+        assert print_pdf(src, self._printer(out), prefer_pdf_orientation=False) is True
+        with pymupdf.open(out) as printed:
+            page = printed[0]
+            assert page.rect.height > page.rect.width
+
+    def test_a_page_range_limits_what_prints(self, app, tmp_path):
+        src = sized_pdf(tmp_path, "three.pdf", (600, 800), (600, 800), (600, 800))
+        out = tmp_path / "out.pdf"
+        assert print_pdf(src, self._printer(out), page_range=(2, 2)) is True
+        with pymupdf.open(out) as printed:
+            assert printed.page_count == 1
+
+
 class TestWindow:
     @pytest.fixture
     def window(self, app):
@@ -183,6 +266,12 @@ class TestWindow:
 
     def test_stop_starts_disabled(self, window):
         assert window.stop_button.isEnabled() is False
+
+    def test_orientation_preference_defaults_on(self, window):
+        assert window.prefer_orientation_check.isChecked() is True
+
+    def test_no_page_range_until_one_is_chosen(self, window):
+        assert window._current_page_range() is None
 
     def test_requesting_stop_sets_the_flag(self, window):
         window._request_stop()
