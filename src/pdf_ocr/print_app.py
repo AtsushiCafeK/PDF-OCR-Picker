@@ -148,6 +148,22 @@ def collect_pdfs(paths: Iterable[Path], recursive: bool = False) -> list[Path]:
     return result
 
 
+def local_paths(mime) -> list[Path]:
+    """Local filesystem paths from a drag-and-drop payload.
+
+    A drop carries URLs; the ones that name a local file or folder convert to a
+    path, and anything else (a web URL dragged from a browser, say) yields an
+    empty string and is dropped. Folders are kept as-is -- ``collect_pdfs``, via
+    ``_add_paths``, expands them into their PDFs.
+    """
+    paths: list[Path] = []
+    for url in mime.urls():
+        local = url.toLocalFile()
+        if local:
+            paths.append(Path(local))
+    return paths
+
+
 def run_print_job(
     files: list[Path],
     print_one: Callable[[Path], bool],
@@ -283,6 +299,7 @@ class PrintWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("PDF印刷")
         self.resize(560, 520)
+        self.setAcceptDrops(True)  # drop files or folders anywhere on the window
         self._stop = False
         self._printing = False
 
@@ -466,6 +483,24 @@ class PrintWindow(QMainWindow):
             self.file_list.item(i).data(Qt.ItemDataRole.UserRole)
             for i in range(self.file_list.count())
         ]
+
+    # -- drag and drop -----------------------------------------------------
+
+    def dragEnterEvent(self, event) -> None:
+        # Accept the drag only when it carries file/folder URLs, so the cursor
+        # shows "can drop here" over this window and nowhere misleading.
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:
+        paths = local_paths(event.mimeData())
+        if paths:
+            self._add_paths(paths)
+            event.acceptProposedAction()
 
     # -- printing ----------------------------------------------------------
 

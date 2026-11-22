@@ -14,6 +14,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QMimeData, QUrl  # noqa: E402
 from PySide6.QtPrintSupport import QPrinter  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -22,6 +23,7 @@ from pdf_ocr.print_app import (  # noqa: E402
     clamp_page_range,
     collect_pdfs,
     is_landscape,
+    local_paths,
     needs_rotation,
     print_pdf,
     run_print_job,
@@ -232,6 +234,59 @@ class TestOrientationPrinting:
         assert print_pdf(src, self._printer(out), page_range=(2, 2)) is True
         with pymupdf.open(out) as printed:
             assert printed.page_count == 1
+
+
+class _FakeDrop:
+    """A stand-in for QDropEvent -- dropEvent only reads these two methods."""
+
+    def __init__(self, mime: QMimeData) -> None:
+        self._mime = mime
+        self.accepted = False
+
+    def mimeData(self) -> QMimeData:
+        return self._mime
+
+    def acceptProposedAction(self) -> None:
+        self.accepted = True
+
+
+class TestDragAndDrop:
+    def test_local_paths_keeps_only_local_urls(self, tmp_path):
+        a = sample_pdf(tmp_path, "invoice_01_centered")
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(str(a)), QUrl("https://example.com/x.pdf")])
+        assert local_paths(mime) == [a]
+
+    def test_dropping_files_queues_them(self, app, tmp_path):
+        a = sample_pdf(tmp_path, "invoice_01_centered")
+        b = sample_pdf(tmp_path, "other_01_quotation")
+        window = PrintWindow()
+        try:
+            mime = QMimeData()
+            mime.setUrls([QUrl.fromLocalFile(str(a)), QUrl.fromLocalFile(str(b))])
+            event = _FakeDrop(mime)
+            window.dropEvent(event)
+            assert window._queued_files() == [a, b]
+            assert event.accepted is True
+        finally:
+            window.close()
+            window.deleteLater()
+            app.processEvents()
+
+    def test_dropping_a_folder_expands_to_its_pdfs(self, app, tmp_path):
+        folder = tmp_path / "in"
+        sample_pdf(folder, "invoice_01_centered")
+        sample_pdf(folder, "other_01_quotation")
+        window = PrintWindow()
+        try:
+            mime = QMimeData()
+            mime.setUrls([QUrl.fromLocalFile(str(folder))])
+            window.dropEvent(_FakeDrop(mime))
+            assert len(window._queued_files()) == 2
+        finally:
+            window.close()
+            window.deleteLater()
+            app.processEvents()
 
 
 class TestWindow:
