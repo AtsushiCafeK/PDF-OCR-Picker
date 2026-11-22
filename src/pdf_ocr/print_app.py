@@ -155,12 +155,16 @@ _DRIVE_LETTER = re.compile(r"[A-Za-z]:")
 def _is_local_drive_path(path: Path) -> bool:
     """Whether a path sits on a real local drive letter, e.g. ``C:\\...``.
 
-    Rejects UNC and device-namespace paths in every spelling: pathlib's
-    ``drive`` canonicalises ``\\\\server\\share``, ``//server/share`` and
-    ``\\\\?\\UNC\\server\\share`` all to a UNC drive, so testing the drive closes
-    the mixed-separator and device-namespace variants that a literal prefix
-    check would miss. The resolved target is checked too, so a symlink or
-    junction pointing at a UNC share is caught as well.
+    The test is purely lexical and never touches the filesystem, on purpose.
+    pathlib's ``drive`` canonicalises ``\\\\server\\share``, ``//server/share``
+    and ``\\\\?\\UNC\\server\\share`` all to a UNC drive, so a single check on the
+    drive rejects every spelling of a UNC path that a literal prefix test would
+    miss -- and it does so without ever resolving the path.
+
+    Not resolving is the point: calling ``Path.resolve()`` on an unproven path
+    would itself open it, and for a UNC path that is exactly the SMB
+    authentication we are trying to avoid -- validating would trigger the very
+    credential leak. So the check stays lexical.
 
     Why it matters: opening a file on a remote host makes Windows authenticate
     to that host over SMB. A drag from an untrusted source (a web page, or a
@@ -169,17 +173,7 @@ def _is_local_drive_path(path: Path) -> bool:
     drive letter stays allowed -- that is a connection the user set up to a host
     they already trust, not one an attacker chose.
     """
-    for candidate in (path, _safe_resolve(path)):
-        if not _DRIVE_LETTER.fullmatch(candidate.drive):
-            return False
-    return True
-
-
-def _safe_resolve(path: Path) -> Path:
-    try:
-        return path.resolve()
-    except OSError:
-        return path
+    return bool(_DRIVE_LETTER.fullmatch(path.drive))
 
 
 def local_paths(mime) -> list[Path]:
