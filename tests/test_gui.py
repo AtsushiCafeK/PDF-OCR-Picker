@@ -564,7 +564,7 @@ class TestRunFromSelected:
         window.file_list.setCurrentRow(-1)
         window._classify_from_selected()
         assert window._batch_running is False
-        assert "Select" in window.statusBar().currentMessage()
+        assert "選んで" in window.statusBar().currentMessage()
 
     def test_the_button_disables_during_a_run(self, window, tmp_path):
         self._populate(window, tmp_path, 3)

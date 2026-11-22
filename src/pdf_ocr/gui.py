@@ -271,7 +271,7 @@ class QtLogHandler(logging.Handler):
 class MainWindow(QMainWindow):
     def __init__(self, rules_path: Path, config_path: Path | None = None) -> None:
         super().__init__()
-        self.setWindowTitle("PDF invoice classifier -- debug")
+        self.setWindowTitle("PDF請求書判定 ― デバッグ")
         self.resize(1500, 950)
 
         self.rules_path = rules_path
@@ -318,10 +318,10 @@ class MainWindow(QMainWindow):
                 root=self.config.input_dir,
             )
             self.statusBar().showMessage(
-                f"{self.file_list.count()} document(s) from {self.config.input_dir}"
+                f"{self.config.input_dir} から {self.file_list.count()} 件"
             )
         else:
-            self.statusBar().showMessage("Open a PDF or a folder to begin.")
+            self.statusBar().showMessage("PDFかフォルダを開いて開始します。")
 
     # -- construction ------------------------------------------------------
 
@@ -331,66 +331,66 @@ class MainWindow(QMainWindow):
 
         self.file_list = QListWidget()
         self.file_list.currentItemChanged.connect(self._on_file_selected)
-        layout.addWidget(QLabel("Documents"))
+        layout.addWidget(QLabel("ファイル"))
         layout.addWidget(self.file_list, 1)
 
-        self.recurse_check = QCheckBox("Include subfolders")
+        self.recurse_check = QCheckBox("サブフォルダも含める")
         self.recurse_check.setToolTip(
-            "List PDFs in subfolders of the opened folder too, not just the top "
-            "level. Remembered in config.yaml, so the command line's batch/diag "
-            "recurse as well when this is on."
+            "開いたフォルダの直下だけでなく、サブフォルダ内のPDFも一覧に含めます。"
+            "config.yaml に記憶され、ONのときはコマンドラインの batch/diag も"
+            "サブフォルダを対象にします。"
         )
         self.recurse_check.setChecked(self.config.recursive)
         self.recurse_check.stateChanged.connect(lambda _state: self._on_recurse_toggled())
         layout.addWidget(self.recurse_check)
 
         run_row = QHBoxLayout()
-        self.classify_all_button = QPushButton("Classify all")
+        self.classify_all_button = QPushButton("すべて判定")
         self.classify_all_button.clicked.connect(self._classify_all)
         run_row.addWidget(self.classify_all_button, 1)
 
-        self.run_from_button = QPushButton("Run from selected")
+        self.run_from_button = QPushButton("選択位置から実行")
         self.run_from_button.setToolTip(
-            "Classify from the selected document to the end of the list, rather "
-            "than the whole folder. After a Stop, select where to pick up and "
-            "resume here; after changing a rule, re-run from the document you "
-            "were looking at without paying for the ones before it again."
+            "フォルダ全体ではなく、選択中のファイルから一覧の最後まで判定します。"
+            "停止したあと、再開したい位置を選んでここから続けたり、ルールを変えた"
+            "あとに、見ていたファイルから（手前のファイルのOCRをやり直さずに）"
+            "再実行したりできます。"
         )
         self.run_from_button.clicked.connect(self._classify_from_selected)
         run_row.addWidget(self.run_from_button, 1)
 
-        self.stop_button = QPushButton("Stop")
+        self.stop_button = QPushButton("停止")
         self.stop_button.setEnabled(False)
         self.stop_button.setToolTip(
-            "Stop the run. OCR cannot be interrupted mid-page, so the document "
-            "being read now finishes; nothing after it is started."
+            "実行を停止します。OCRはページ途中で中断できないため、いま読み込み中の"
+            "ファイルは最後まで処理し、それ以降は開始しません。"
         )
         self.stop_button.clicked.connect(self._stop_batch)
         run_row.addWidget(self.stop_button)
         layout.addLayout(run_row)
 
         # -- sorted preview
-        sort_box = QGroupBox("Sorted copy")
+        sort_box = QGroupBox("仕分けコピー")
         sort_layout = QVBoxLayout(sort_box)
-        self.sort_check = QCheckBox("Copy into verdict folders while classifying")
+        self.sort_check = QCheckBox("判定しながら結果フォルダへコピーする")
         self.sort_check.setToolTip(
-            "During 'Classify all', copy each document into "
+            "「すべて判定」の実行中、選んだフォルダの下の "
             + " / ".join(DEFAULT_FOLDER_NAMES.values())
-            + " under the chosen folder, so a large batch can be reviewed the "
-            "way it will actually look. Copies, never moves -- the source folder "
-            "is left untouched."
+            + " に各ファイルをコピーします。大量のバッチを、実際の仕分け結果の"
+            "見た目で確認できます。移動ではなくコピーなので、元のフォルダは"
+            "そのまま残ります。"
         )
         self.sort_check.stateChanged.connect(lambda _state: self._update_sort_label())
         sort_layout.addWidget(self.sort_check)
 
         choose_row = QHBoxLayout()
-        self.sort_dir_button = QPushButton("Destination...")
+        self.sort_dir_button = QPushButton("コピー先…")
         self.sort_dir_button.clicked.connect(self._choose_sort_directory)
         choose_row.addWidget(self.sort_dir_button)
         choose_row.addStretch(1)
         sort_layout.addLayout(choose_row)
 
-        self.sort_dir_label = QLabel("no destination chosen")
+        self.sort_dir_label = QLabel("コピー先が未選択")
         self.sort_dir_label.setWordWrap(True)
         self.sort_dir_label.setStyleSheet("color: grey;")
         sort_layout.addWidget(self.sort_dir_label)
@@ -401,7 +401,7 @@ class MainWindow(QMainWindow):
         self.verdict_label.setStyleSheet("font-size: 20px; font-weight: bold;")
         self.score_label = QLabel("")
         self.source_label = QLabel("")
-        verdict_box = QGroupBox("Result")
+        verdict_box = QGroupBox("判定結果")
         verdict_layout = QVBoxLayout(verdict_box)
         verdict_layout.addWidget(self.verdict_label)
         verdict_layout.addWidget(self.score_label)
@@ -409,14 +409,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(verdict_box)
 
         # -- normalization ladder
-        normalize_box = QGroupBox("Normalization")
+        normalize_box = QGroupBox("正規化")
         normalize_layout = QVBoxLayout(normalize_box)
         self.normalize_checks: dict[str, QCheckBox] = {}
         for field, label in (
-            ("nfkc", "NFKC  (ＩＮＶＯＩＣＥ, ㈱, half-width kana)"),
-            ("strip_whitespace", "Strip whitespace  (請　求　書)"),
-            ("strip_symbols", "Strip symbols  (請|求|書)"),
-            ("lowercase", "Lowercase"),
+            ("nfkc", "NFKC（ＩＮＶＯＩＣＥ, ㈱, 半角カナ）"),
+            ("strip_whitespace", "空白を除去（請　求　書）"),
+            ("strip_symbols", "記号を除去（請|求|書）"),
+            ("lowercase", "小文字化"),
         ):
             check = QCheckBox(label)
             check.setChecked(getattr(self.ruleset.normalize, field))
@@ -426,28 +426,28 @@ class MainWindow(QMainWindow):
         layout.addWidget(normalize_box)
 
         # -- matching
-        matching_box = QGroupBox("Matching")
+        matching_box = QGroupBox("マッチング")
         matching_layout = QVBoxLayout(matching_box)
-        self.fuzzy_text_layer_check = QCheckBox("Allow loose matching on text layers")
+        self.fuzzy_text_layer_check = QCheckBox("テキスト層でもあいまい一致を許可する")
         self.fuzzy_text_layer_check.setChecked(self.ruleset.fuzzy_on_text_layer)
         self.fuzzy_text_layer_check.setToolTip(
-            "Text-layer characters are already exact, so loosening the match there "
-            "cannot recover a missing keyword -- only invent one."
+            "テキスト層の文字はすでに正確なので、そこで一致を緩めても欠けている"
+            "キーワードは拾えません。むしろ誤検出を生むだけです。"
         )
         self.fuzzy_text_layer_check.stateChanged.connect(lambda _state: self._rescore())
         matching_layout.addWidget(self.fuzzy_text_layer_check)
 
-        self.force_ocr_check = QCheckBox("Force OCR (ignore the text layer)")
+        self.force_ocr_check = QCheckBox("OCRを強制（テキスト層を無視）")
         self.force_ocr_check.setToolTip(
-            "Re-reads the page with the recogniser even when it has a text layer, "
-            "so the two can be compared. Costs seconds per page."
+            "テキスト層があっても認識器でページを読み直し、両者を比較できます。"
+            "1ページあたり数秒かかります。"
         )
         self.force_ocr_check.stateChanged.connect(lambda _state: self._reload_current())
         matching_layout.addWidget(self.force_ocr_check)
         layout.addWidget(matching_box)
 
         # -- thresholds
-        threshold_box = QGroupBox("Thresholds")
+        threshold_box = QGroupBox("しきい値")
         threshold_layout = QFormLayout(threshold_box)
         self.high_slider, self.high_value = self._threshold_row(
             int(self.ruleset.thresholds.high)
@@ -456,14 +456,14 @@ class MainWindow(QMainWindow):
             int(self.ruleset.thresholds.low)
         )
         threshold_layout.addRow(
-            "invoice at or above", self._pair(self.high_slider, self.high_value)
+            "請求書とみなす下限", self._pair(self.high_slider, self.high_value)
         )
         threshold_layout.addRow(
-            "review at or above", self._pair(self.low_slider, self.low_value)
+            "要確認とみなす下限", self._pair(self.low_slider, self.low_value)
         )
         layout.addWidget(threshold_box)
 
-        dock = QDockWidget("Controls", self)
+        dock = QDockWidget("操作", self)
         dock.setWidget(panel)
         dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
         dock.setMinimumWidth(360)
@@ -494,12 +494,12 @@ class MainWindow(QMainWindow):
         # -- hits
         self.hits_table = QTableWidget(0, 7)
         self.hits_table.setHorizontalHeaderLabels(
-            ["weight", "rule", "pattern", "matched text", "kind", "dist", "scope"]
+            ["加点", "ルール", "パターン", "一致した文字", "種類", "距離", "範囲"]
         )
         self.hits_table.horizontalHeader().setStretchLastSection(True)
         self.hits_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.hits_table.itemSelectionChanged.connect(self._on_hit_selected)
-        tabs.addTab(self.hits_table, "Hits")
+        tabs.addTab(self.hits_table, "ヒット")
 
         # -- text
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -507,7 +507,7 @@ class MainWindow(QMainWindow):
         self.raw_text.setReadOnly(True)
         self.normalized_text = QPlainTextEdit()
         self.normalized_text.setReadOnly(True)
-        panes = ((self.raw_text, "As extracted"), (self.normalized_text, "Normalized"))
+        panes = ((self.raw_text, "抽出テキスト"), (self.normalized_text, "正規化後"))
         for widget, caption in panes:
             holder = QWidget()
             column = QVBoxLayout(holder)
@@ -515,7 +515,7 @@ class MainWindow(QMainWindow):
             column.addWidget(QLabel(caption))
             column.addWidget(widget)
             splitter.addWidget(holder)
-        tabs.addTab(splitter, "Text")
+        tabs.addTab(splitter, "テキスト")
 
         # -- rules
         rules_panel = QWidget()
@@ -530,44 +530,44 @@ class MainWindow(QMainWindow):
 
         buttons = QHBoxLayout()
         for caption, slot in (
-            ("Add rule", self._add_rule),
-            ("Remove rule", self._remove_rule),
-            ("Open...", self._open_rules_file),
-            ("Reload from file", self._reload_rules),
-            ("Save as...", self._save_rules_as),
+            ("ルール追加", self._add_rule),
+            ("ルール削除", self._remove_rule),
+            ("開く…", self._open_rules_file),
+            ("ファイルから再読み込み", self._reload_rules),
+            ("名前を付けて保存…", self._save_rules_as),
         ):
             button = QPushButton(caption)
             button.clicked.connect(slot)
             buttons.addWidget(button)
         buttons.addStretch(1)
         rules_layout.addLayout(buttons)
-        tabs.addTab(rules_panel, "Rules")
+        tabs.addTab(rules_panel, "ルール")
 
         # -- log
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(2000)
-        tabs.addTab(self.log_view, "Log")
+        tabs.addTab(self.log_view, "ログ")
 
-        dock = QDockWidget("Detail", self)
+        dock = QDockWidget("詳細", self)
         dock.setWidget(tabs)
         dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
         dock.setMinimumHeight(280)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
 
     def _build_menu(self) -> None:
-        file_menu = self.menuBar().addMenu("&File")
+        file_menu = self.menuBar().addMenu("ファイル(&F)")
         for caption, shortcut, slot in (
-            ("Open PDF...", "Ctrl+O", self._open_file),
-            ("Open folder...", "Ctrl+Shift+O", self._open_folder),
+            ("PDFを開く…", "Ctrl+O", self._open_file),
+            ("フォルダを開く…", "Ctrl+Shift+O", self._open_folder),
         ):
             action = QAction(caption, self)
             action.setShortcut(shortcut)
             action.triggered.connect(slot)
             file_menu.addAction(action)
 
-        view_menu = self.menuBar().addMenu("&View")
-        fit_action = QAction("Fit page", self)
+        view_menu = self.menuBar().addMenu("表示(&V)")
+        fit_action = QAction("ページを合わせる", self)
         fit_action.setShortcut("Ctrl+0")
         fit_action.triggered.connect(self.page_view.fit)
         view_menu.addAction(fit_action)
@@ -584,13 +584,13 @@ class MainWindow(QMainWindow):
     # -- file handling -----------------------------------------------------
 
     def _open_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Open PDF", "", "PDF files (*.pdf)")
+        path, _ = QFileDialog.getOpenFileName(self, "PDFを開く", "", "PDFファイル (*.pdf)")
         if path:
             self._populate([Path(path)])
 
     def _open_folder(self) -> None:
         start = str(self.config.input_dir) if self.config.input_dir else ""
-        directory = QFileDialog.getExistingDirectory(self, "Open folder", start)
+        directory = QFileDialog.getExistingDirectory(self, "フォルダを開く", start)
         if directory:
             chosen = Path(directory)
             self._remember_input_dir(chosen)
@@ -643,7 +643,7 @@ class MainWindow(QMainWindow):
         if paths and select_first:
             self.file_list.setCurrentRow(0)
         elif not paths:
-            self.statusBar().showMessage("No PDFs found in that folder.")
+            self.statusBar().showMessage("そのフォルダにPDFがありません。")
 
     def _on_file_selected(self, current: QListWidgetItem | None, _previous=None) -> None:
         if current is not None:
@@ -656,10 +656,10 @@ class MainWindow(QMainWindow):
 
     def _load(self, path: Path) -> None:
         if self._thread is not None:
-            self.statusBar().showMessage("Still reading the previous document...")
+            self.statusBar().showMessage("前のファイルを読み込み中です…")
             return
 
-        self.statusBar().showMessage(f"Reading {path.name}...")
+        self.statusBar().showMessage(f"{path.name} を読み込み中…")
         self.setEnabled_inputs(False)
         self._current_path = path
 
@@ -789,8 +789,8 @@ class MainWindow(QMainWindow):
         self.raw_text.setPlainText(self.normalized.raw)
         self.normalized_text.setPlainText(self.normalized.text)
         self.statusBar().showMessage(
-            f"{self.document.path.name} -- {len(page.blocks)} blocks, "
-            f"{len(self.normalized.text)} characters after normalization"
+            f"{self.document.path.name} ― ブロック {len(page.blocks)} 個、"
+            f"正規化後 {len(self.normalized.text)} 文字"
         )
 
     def _show_result(self, result: ScoreResult) -> None:
@@ -800,9 +800,11 @@ class MainWindow(QMainWindow):
         )
         positive = sum(hit.weight for hit in result.positive_hits)
         negative = sum(hit.weight for hit in result.negative_hits)
-        self.score_label.setText(f"score {result.score:.0f}   (+{positive:.0f} / {negative:.0f})")
-        source = "text layer" if result.source is Source.TEXT_LAYER else "OCR"
-        self.source_label.setText(f"read from the {source}")
+        self.score_label.setText(
+            f"スコア {result.score:.0f}   (+{positive:.0f} / {negative:.0f})"
+        )
+        source = "テキスト層" if result.source is Source.TEXT_LAYER else "OCR"
+        self.source_label.setText(f"{source}から読み取り")
 
     def _fill_hits(self, result: ScoreResult) -> None:
         self.hits_table.setRowCount(len(result.hits))
@@ -935,25 +937,25 @@ class MainWindow(QMainWindow):
         """
         start = str(self.rules_path.parent)
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open a rules file", start, "YAML (*.yaml *.yml)"
+            self, "ルールファイルを開く", start, "YAML (*.yaml *.yml)"
         )
         if not path:
             return
         try:
             ruleset = RuleSet.load(Path(path))
         except (RuleError, OSError) as error:
-            QMessageBox.warning(self, "Rules", str(error))
+            QMessageBox.warning(self, "ルール", str(error))
             return
         self._apply_loaded_ruleset(ruleset)
         self.statusBar().showMessage(
-            f"Loaded {path}   ('Reload from file' still returns to the default)"
+            f"{path} を読み込みました（「ファイルから再読み込み」で既定に戻ります）"
         )
 
     def _reload_rules(self) -> None:
         try:
             ruleset = RuleSet.load(self.rules_path)
         except (RuleError, OSError) as error:
-            QMessageBox.warning(self, "Rules", str(error))
+            QMessageBox.warning(self, "ルール", str(error))
             return
         self._apply_loaded_ruleset(ruleset)
 
@@ -977,7 +979,7 @@ class MainWindow(QMainWindow):
 
         suggested = str(self.rules_path.with_name("rules.tuned.yaml"))
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save rules as", suggested, "YAML (*.yaml *.yml)"
+            self, "ルールを名前を付けて保存", suggested, "YAML (*.yaml *.yml)"
         )
         if not path:
             return
@@ -1001,14 +1003,14 @@ class MainWindow(QMainWindow):
             yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8"
         )
         logger.info("wrote %s (comments from the original are not carried over)", path)
-        self.statusBar().showMessage(f"Saved {path}")
+        self.statusBar().showMessage(f"{path} に保存しました")
 
     # -- sorted preview ----------------------------------------------------
 
     def _choose_sort_directory(self) -> None:
         start = str(self.config.output_dir) if self.config.output_dir else ""
         directory = QFileDialog.getExistingDirectory(
-            self, "Where to copy the sorted documents", start
+            self, "仕分けコピーの保存先", start
         )
         if not directory:
             return
@@ -1021,10 +1023,10 @@ class MainWindow(QMainWindow):
             # another generation of duplicates.
             QMessageBox.warning(
                 self,
-                "Sorted copy",
-                f"{chosen}\n\nis inside the folder being classified. Choose a "
-                f"destination outside it, or the copies will be classified "
-                f"again on the next run.",
+                "仕分けコピー",
+                f"{chosen}\n\nは判定対象のフォルダの中にあります。コピーが次回の"
+                f"入力として再び判定されてしまうため、対象フォルダの外を選んで"
+                f"ください。",
             )
             return
 
@@ -1043,10 +1045,10 @@ class MainWindow(QMainWindow):
 
     def _update_sort_label(self) -> None:
         if self.sort_directory is None:
-            self.sort_dir_label.setText("no destination chosen")
+            self.sort_dir_label.setText("コピー先が未選択")
             return
         existing = count_sorted_output(self.sort_directory, DEFAULT_FOLDER_NAMES.values())
-        suffix = f"  ({existing} already sorted there)" if existing else ""
+        suffix = f"  （既に {existing} 件あり）" if existing else ""
         self.sort_dir_label.setText(f"{self.sort_directory}{suffix}")
 
     def _prepare_sort_directory(self) -> bool:
@@ -1060,7 +1062,7 @@ class MainWindow(QMainWindow):
         """
         if self.sort_directory is None:
             QMessageBox.information(
-                self, "Sorted copy", "Choose a destination folder first."
+                self, "仕分けコピー", "先にコピー先フォルダを選んでください。"
             )
             return False
 
@@ -1068,13 +1070,13 @@ class MainWindow(QMainWindow):
         if existing:
             answer = QMessageBox.question(
                 self,
-                "Sorted copy",
+                "仕分けコピー",
                 f"{self.sort_directory}\n\n"
-                f"already holds {existing} sorted PDF(s) from an earlier run.\n"
-                f"Delete them and sort again?\n\n"
-                f"Only PDFs directly inside "
-                f"{', '.join(DEFAULT_FOLDER_NAMES.values())} are removed. "
-                f"The documents being classified are not touched.",
+                f"には前回の実行による仕分け済みPDFが {existing} 件あります。\n"
+                f"削除してもう一度仕分けしますか？\n\n"
+                f"削除されるのは "
+                f"{', '.join(DEFAULT_FOLDER_NAMES.values())} 直下のPDFだけです。"
+                f"判定対象のファイルには手を付けません。",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
             )
@@ -1147,7 +1149,7 @@ class MainWindow(QMainWindow):
         """
         start = self.file_list.currentRow()
         if start < 0:
-            self.statusBar().showMessage("Select a document to start from first.")
+            self.statusBar().showMessage("開始するファイルを先に選んでください。")
             return
         self._start_batch(range(start, self.file_list.count()))
 
@@ -1181,7 +1183,7 @@ class MainWindow(QMainWindow):
         self._stop_requested = True
         self._pending_batch = []
         self.stop_button.setEnabled(False)
-        self.statusBar().showMessage("Stopping after the current document...")
+        self.statusBar().showMessage("現在のファイルの処理後に停止します…")
 
     def _finish_batch(self, stopped: bool = False) -> None:
         self._batch_running = False
@@ -1190,7 +1192,7 @@ class MainWindow(QMainWindow):
         if self._debug_log is not None:
             self._debug_log.footer(self._sorted_counts, stopped=stopped)
             self._close_debug_log()
-        prefix = "Stopped" if stopped else "Finished"
+        prefix = "停止" if stopped else "完了"
         self.statusBar().showMessage(self._batch_summary(prefix))
         self._update_sort_label()
 
@@ -1211,15 +1213,15 @@ class MainWindow(QMainWindow):
         self.file_list.blockSignals(False)
         self._load(item.data(Qt.ItemDataRole.UserRole))
 
-    def _batch_summary(self, prefix: str = "Finished") -> str:
+    def _batch_summary(self, prefix: str = "完了") -> str:
         if not self._sorted_counts:
-            return f"{prefix} classifying the folder."
+            return f"フォルダの判定を{prefix}しました。"
         tally = "  ".join(
             f"{DEFAULT_FOLDER_NAMES[verdict]} {self._sorted_counts[verdict]}"
             for verdict in Verdict
             if self._sorted_counts[verdict]
         )
-        return f"{prefix}. Copied into {self.sort_directory}:  {tally}   (log.txt written)"
+        return f"{prefix}。{self.sort_directory} にコピー:  {tally}   （log.txt を出力）"
 
     def _annotate(self, item: QListWidgetItem, result: ScoreResult) -> None:
         name = item.data(Qt.ItemDataRole.UserRole).name
