@@ -1,6 +1,6 @@
 [project]
 name = "pdf-ocr"
-version = "0.3.2"
+version = "0.3.3"
 description = "Classify PDFs as invoices and file them accordingly"
 authors = [
     {name = "Atsushi",email = "atsushi.shindo@it-libero.jp"}
